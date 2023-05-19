@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "sports-betting"
+version = "0.1.0"
+description = ""
+authors = ["Casey Rand"]
+readme = "README.md"
+packages = [{include = "sports_betting"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+jupyterlab = "^4.0.0"
+selenium = "^4.9.1"
+pandas = "^2.0.1"
+requests = "^2.30.0"
+bs4 = "^0.0.1"
+openpyxl = "^3.1.2"
+pypdf2 = "^3.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
