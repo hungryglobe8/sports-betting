@@ -21,7 +21,9 @@ def get_links(url, keyword):
     for link in soup.find_all('a'):
         href = link.get('href')
         if keyword in href:
-            links.append(urljoin(url, href))
+            # Specific to Iowa for capturing right links.
+            if 'Revenue' in link.text and 'FYTD' not in link.text:
+                links.append(urljoin(url, href))
     return links
 
 
@@ -53,7 +55,7 @@ def parse_page(path, page, idx):
     category, date = title.split(' - ')
     # Skip full year for now.
     if "FY" in date:
-        raise(f"FY not currently being parsed")
+        raise Exception(f"FY not currently being parsed")
     table = camelot.read_pdf(path, pages=str(idx + 1))[0]
     # Check that category matches up.
     if "ONLINE SPORTS WAGERING" in category:
@@ -61,7 +63,7 @@ def parse_page(path, page, idx):
     elif "SPORTS WAGERING REVENUE" in category:
         return SportsIowa(table, date)
     else:
-        raise(f"{category} - {date} not found")
+        raise Exception(f"{category} - {date} not found")
 
 
 def get_title(page):
@@ -101,7 +103,10 @@ class Iowa:
         out_df.reset_index(drop=True, inplace=True)
         # Remove empty Providers.
         out_df.dropna(how='any', subset='Provider', inplace=True)
+        # Fixes weird pdf column mistakes.
         self.fix_whitespace(out_df, 'Provider')
+        # Use Title instead of ALLCAPS.
+        out_df.columns = out_df.columns.str.title()
         return out_df
 
     @staticmethod
@@ -173,8 +178,11 @@ class OnlineIowa(Iowa):
 
 if __name__ == '__main__':
     historical = get_links('https://irgc.iowa.gov/publications-reports/sports-wagering-revenue/archived-sports-revenue', 'media')
-    parsed = [parse_pdf(h) for h in historical]
+    current = get_links('https://irgc.iowa.gov/publications-reports/sports-wagering-revenue', 'media')
+    parsed = [parse_pdf(l) for l in (*historical, *current)]
     parsed = list(chain(*parsed))
     cleaned = [p.clean() for p in parsed]
     df = pd.concat(cleaned)
-    df.to_excel('Iowa (OSB).xlsx')
+    # Weird TOTAL rows.
+    df.dropna(subset='Date', inplace=True)
+    df.to_excel('Iowa (OSB).xlsx', index=False)
