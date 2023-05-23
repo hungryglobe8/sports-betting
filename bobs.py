@@ -11,6 +11,8 @@ def get_links(url, href_keys=[], text_keys=[]):
     links = []
     for link in soup.find_all('a'):
         href = link.get('href')
+        if href is None:
+            continue
         if all(key in href for key in href_keys) and all(key in link.text for key in text_keys):
             links.append(urljoin(url, href))
     return links
