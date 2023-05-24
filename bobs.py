@@ -7,6 +7,10 @@ import pandas as pd
 def get_links(url, href_keys=[], text_keys=[]):
     """ Returns all links on a page which contain a keyword. """
     response = requests.get(url)
+    # Forbidden request, try more valid user header.
+    if response.status_code == 403:
+        HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36'}
+        response = requests.get(url, headers=HEADERS)
     soup = BeautifulSoup(response.text, 'html.parser')
     links = []
     for link in soup.find_all('a'):
