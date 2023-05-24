@@ -2,7 +2,14 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import pandas as pd
+from datetime import datetime
+import re
 
+
+class InvalidExtraction(Exception):
+    def __init__(self, text, datefmt):
+        self.message = f'{text} could not be parsed for {datefmt}'
+        super().__init__(self.message)
 
 def get_links(url, href_keys=[], text_keys=[]):
     """ Returns all links on a page which contain a keyword. """
@@ -20,6 +27,13 @@ def get_links(url, href_keys=[], text_keys=[]):
         if all(key in href for key in href_keys) and all(key in link.text for key in text_keys):
             links.append(urljoin(url, href))
     return links
+
+def extract_date(text, regex, datefmt):
+    """ Extract a date from a text through regex and datefmt. """
+    try:
+        return datetime.strptime(re.search(regex, text)[0], datefmt)
+    except:
+        raise InvalidExtraction(text, datefmt)
 
 
 class Table:

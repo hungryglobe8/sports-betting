@@ -2090,6 +2090,27 @@ full = ["Pillow", "PyCryptodome"]
 image = ["Pillow"]
 
 [[package]]
+name = "pypdfium2"
+version = "4.12.0"
+description = "Python bindings to PDFium"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "pypdfium2-4.12.0-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:3f143cf5a88786281af4f645896060a4273375318bb96f40ebe0657ed29d8f69"},
+    {file = "pypdfium2-4.12.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:5605453f8e0b797aba208a371ddcc0d65941e4e6a48814a6f863b50f222f02de"},
+    {file = "pypdfium2-4.12.0-py3-none-manylinux_2_26_aarch64.whl", hash = "sha256:7bfa94157f1d78f68a06a54eace211f58af67a9edd559f24247d1f1c15b9ff20"},
+    {file = "pypdfium2-4.12.0-py3-none-manylinux_2_26_armv7l.whl", hash = "sha256:cfa385370ddb03ca0ac612a1f269b7c38a22819cbcc974a2118abf26681dd8f8"},
+    {file = "pypdfium2-4.12.0-py3-none-manylinux_2_26_i686.whl", hash = "sha256:8e67c1fa61a8c3b9c06de1a3386ac53dc356b9c8a4c1d5cb94222a5cd1686001"},
+    {file = "pypdfium2-4.12.0-py3-none-manylinux_2_26_x86_64.whl", hash = "sha256:a8efc87a22d2fab4f5a47478b63e7af8675fb6694242ddbf99bd75b6422b7c03"},
+    {file = "pypdfium2-4.12.0-py3-none-musllinux_1_2_i686.whl", hash = "sha256:87b0729961b4172fb0885ed8c38771ad3b6e639ac428ce1f6b37c2154e221eaa"},
+    {file = "pypdfium2-4.12.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:cbcb79684cc19b3141d8134a635e2112bca8646b6cf7bf951b1e7d860bd2556a"},
+    {file = "pypdfium2-4.12.0-py3-none-win32.whl", hash = "sha256:abc1b4e40bc9fd5256b2319d14fdb7de24035dabb6979abbd805ad67e58dce10"},
+    {file = "pypdfium2-4.12.0-py3-none-win_amd64.whl", hash = "sha256:4245ce998ff52974a5f8a5a488a766797e88dc63e2672dd2b59457a90aa3fb02"},
+    {file = "pypdfium2-4.12.0-py3-none-win_arm64.whl", hash = "sha256:cf22348df3a240f1180496c507c97a038dd27845c784d170e787f08383b36fca"},
+    {file = "pypdfium2-4.12.0.tar.gz", hash = "sha256:3466d7d03d74d667d7688b15b678b54d7a403f942a391a44deecd947e4b7d282"},
+]
+
+[[package]]
 name = "pyrsistent"
 version = "0.19.3"
 description = "Persistent/Functional/Immutable data structures"
@@ -2782,4 +2803,4 @@ test = ["pytest", "pytest-cov"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "9fd77852f69991080917459f0f6888e990b8c335cb4650554b857b0b1b14c561"
+content-hash = "bff91e4eedf83904cb2e4d75a16afb0c9fb92c96a6f8430cce095bea6576d569"

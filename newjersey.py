@@ -1,70 +1,79 @@
 import bobs
+from PyPDF2 import PdfReader
+import pypdfium2 as pdfium
 from pathlib import Path
 import requests
-from PyPDF2 import PdfReader
-from datetime import datetime
 import pandas as pd
-import re
-
-def parse_pdf(url):
-    """ Open a pdf, read titles, parse tables, and close pdf. """
-    path = Path('temp.pdf')
-    path.write_bytes(requests.get(url).content)
-    pdf = PdfReader(str(path))
-    return pdf
-
-def get_lines(page):
-    return [x.strip('$ ') for x in page.extract_text().split('\n')]
-
-def extract_date(text, regex, datefmt):
-    return datetime.strptime(re.search(regex, text)[0], datefmt)
-
+import camelot
 
 class NewJersey(bobs.Table):
     state = 'New Jersey'
 
-
 class IGaming(NewJersey):
     category = 'iGaming'
     
-    def __init__(self, lines):
-        lines[-4] = lines[-4].replace(',', '')
-        self.lines = lines
-        self.timestamp = extract_date(lines[-4], r'\w+ \d{4}', '%B %Y')
-        self.df = self.parse_df()
+    def __init__(self, link):
+        self.link = link
+        self.timestamp = bobs.extract_date(self.link, '\w+\d{4}', '%B%Y')
+        self.temp_storage = 'temp.pdf'
 
-    def parse_df(self):
-        total_gross = 0
-        adjusted_gross = 0
-        subproviders = []
-        for line in self.lines:
-            if not total_gross and line.startswith('6'):
-                total_gross = line.split()[-1]
-            elif not adjusted_gross and line.startswith('8'):
-                adjusted_gross = line.split()[-1]
-            elif any(x in line for x in ['www', '.com']):
-                subproviders.append(line)
-            elif 'Title and License Number' in line:
-                provider = line.split('Number')[-1]
-        df = pd.DataFrame({'State': self.state,
-                           'Category': self.category,
-                           'Date': self.timestamp,
-                           'Provider': provider,
-                           'Sub-Provider': subproviders,
-                           'Total Gross Receipts': total_gross,
-                           'Adjusted Gross Receipts': adjusted_gross})
-        return df
+    def clean(self):
+        # Start by saving PDF.
+        self.read_pdf()
+        num_pages = self.get_pages()
+        # Gather data from each page.
+        out = []
+        for i in range(num_pages):
+            casino = self.get_casino(i)
+            table = (self.get_first_table(i).
+                     replace(r'[$ \n]', '', regex=True))
+            row = table.iloc[1:,-1].str.rstrip('-')
+            out.append({'State': self.state,
+                        'Category': self.category,
+                        'Date': self.timestamp,
+                        'Provider': casino,
+                        'Online Poker': row[1],
+                        'Online Casino': row[2],
+                        'Total': row[3]})
+        return pd.DataFrame(out)
+
+    def read_pdf(self):
+        """ Saves a content stream to temp_storage. """
+        Path(self.temp_storage).write_bytes(requests.get(self.link).content)
+
+    def close_pdf(self):
+        """ Closes temp_storage. """
+        Path(self.temp_storage).unlink()
+
+    def get_pages(self):
+        """ Gets the number of pages from temp storage. """
+        return len(PdfReader(self.temp_storage).pages)
+
+    def get_casino(self, page_num, bound=705):  # 835 used to work and 730
+        """ Open pdfium on page, getting casino header text only. """
+        pdf = pdfium.PdfDocument(self.temp_storage)
+        page = pdf[page_num]
+        textpage = page.get_textpage()
+        text = textpage.get_text_bounded(bottom=bound).removeprefix('INTERNET WIN - CURRENT MONTH')
+        return text.split('MONTHLY')[0].replace('\r\n', '')
+
+    def get_first_table(self, page_num):
+        """ Open camelot on page, getting first table. """
+        tables = camelot.read_pdf(self.link, pages=str(page_num+1))
+        return tables[0].df
     
 
 if __name__ == '__main__':
     url = 'https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/financial-and-statistical-information/monthly-internet-gross-revenue-reports/'
     igaming = bobs.get_links(url, href_keys=['IGRTaxReturns'])
-    first = igaming[0]
-    last = igaming[-1]
-    pdf = parse_pdf(first)
     out_df = []
-    for page in pdf.pages:
-        lines = get_lines(page)
-        out_df.append(IGaming(lines).df)
+    for link in igaming:
+        try:
+            out_df.append(IGaming(link).clean())
+            print(f'Success-{link}')
+        except bobs.InvalidExtraction as e:
+            print(e.message)
+        except:
+            print(f'Broken-{link}')
     df = pd.concat(out_df)
     df.to_excel('New Jersey (iGaming).xlsx', index=False)
