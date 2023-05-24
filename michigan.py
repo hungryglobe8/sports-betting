@@ -99,9 +99,39 @@ class InternetSports(Michigan):
     def get_next(self, data, idx):
         return {
             'Total Handle': data[idx],
-            'Gross Sports Betting Receipts': data[idx+1],
-            'Adjusted Gross Sports Betting Receipts': data[idx+2],
-            'Internet Sports Betting State Tax': data[idx+3]
+            'Total Gross Receipts': data[idx+1],
+            'Adjusted Gross Receipts': data[idx+2],
+            'State Tax': data[idx+3]
+        }
+
+class InternetGames(Michigan):
+    def __init__(self, link):
+        self.df = pd.read_excel(link, sheet_name=0)
+        self.category = 'iGaming'
+        self.subcategory = None
+
+        super().__init__(self.df)
+
+        self.header = (self.df.iloc[:3, 1:-2].
+            dropna(how='all', axis=1).
+            T.
+            reset_index(drop=True)
+        )
+        self.header.columns = ['Operators', 'Provider', 'Sub-Provider']
+        self.body = (self.first_row_to_columns(
+            self.df.iloc[4:18].
+            replace(0, np.nan).
+            dropna(thresh=4)
+        ))
+
+    def clean(self):
+        return super().clean(3)
+
+    def get_next(self, data, idx):
+        return {
+            'Total Gross Receipts': data[idx],
+            'Adjusted Gross Receipts': data[idx+1],
+            'State Tax': data[idx+2]
         }
 
 
@@ -112,4 +142,18 @@ if __name__ == '__main__':
     parsed = chain([RetailSports(r) for r in retail_sports], [InternetSports(i) for i in internet_sports])
     cleaned = [p.clean() for p in parsed]
     df = pd.concat(cleaned)
+    df = df[['State', 'Category', 'Sub-Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
+             'Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
     df.to_excel('Michigan (OSB).xlsx', index=False)
+
+    internet_games = bobs.get_links(url, text_keys=['Internet Gaming', 'Excel'])
+    parsed = [
+        InternetGames(internet_games[0], 'Internet Gaming 2023'),
+        InternetGames(internet_games[1], 'Internet Gaming 2022'),
+        InternetGames(internet_games[2], 'Internet Gaming 2021')
+    ]
+    cleaned = [p.clean() for p in parsed]
+    df = pd.concat(cleaned)
+    df = df[['State', 'Category', 'Sub-Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
+            'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
+    df.to_excel('Michigan (iGaming).xlsx', index=False)
