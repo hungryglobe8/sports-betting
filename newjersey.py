@@ -18,24 +18,22 @@ class IGaming(NewJersey):
         self.temp_storage = 'temp.pdf'
 
     def clean(self):
-        # Start by saving PDF.
+        """ Open PDF, read titles, and relevant first table values. """
         self.read_pdf()
         num_pages = self.get_pages()
         # Gather data from each page.
         out = []
         for i, casino in zip(range(num_pages), self.get_casinos()):
-            #table = (self.get_first_table(i).
-            #         replace(r'[$ \n]', '', regex=True))
-            #row = table.iloc[1:,-1].str.rstrip('-')
+            table = (self.get_first_table(i).
+                     replace(r'[$ \n]', '', regex=True))
+            row = table.iloc[1:,-1].str.rstrip('-')
             out.append({'State': self.state,
-                        'Category': self.category,
+                        'Sub-Category': ['Online Poker', 'Online Casino', 'Total'],
                         'Date': self.timestamp,
                         'Provider': casino,
-                        'Bound': bound})
-                        #'Online Poker': row[1],
-                        #'Online Casino': row[2],
-                        #'Total': row[3]})
-        return pd.DataFrame(out)
+                        'Internet Gaming Win': [row[1], row[2], row[3]]})
+        self.close_pdf()
+        return pd.DataFrame(out).explode(['Sub-Category', 'Internet Gaming Win'])
 
     def read_pdf(self):
         """ Saves a content stream to temp_storage. """
@@ -62,7 +60,7 @@ class IGaming(NewJersey):
                 bound -= 50
                 text = textpage.get_text_bounded(bottom=bound).removeprefix('INTERNET WIN - CURRENT MONTH')
                 casino = text.split('MONTHLY')[0].replace('\r\n', '')
-            casinos.append((casino, bound))
+            casinos.append(casino)
         return casinos
 
     def get_first_table(self, page_num):
