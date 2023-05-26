@@ -25,7 +25,7 @@ def get_links(url, href_keys=[], text_keys=[]):
         if href is None:
             continue
         if all(key in href for key in href_keys) and all(key in link.text for key in text_keys):
-            links.append(urljoin(url, href))
+            links.append(urljoin(url, href.replace(' ', '%20')))
     return links
 
 def extract_date(text, regex, datefmt):
