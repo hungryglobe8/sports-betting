@@ -93,3 +93,10 @@ class Table:
             if '  ' in entry:
                 entry, mistake = entry.split('  ')
             df.at[idx, col] = entry.replace('\n', ' ').replace('  ', ' ')
+
+    @staticmethod
+    def to_numeric(df, cols):
+        """ Tries to make certain columns in a dataframe numeric. Removes commas. """
+        # Remove commas.
+        df[cols] = df[cols].replace(r',', '', regex=True)
+        df[cols] = df[cols].apply(pd.to_numeric, errors='coerce', axis=1)
