@@ -6,9 +6,13 @@ from dateutil.rrule import rrule, MONTHLY
 from dateutil.relativedelta import relativedelta
 from time import sleep
 from pathlib import Path
+import camelot
 import re
 from PyPDF2 import PdfReader
 import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
 
 
 def get_dates(start, end=None):
@@ -16,6 +20,23 @@ def get_dates(start, end=None):
     if not end:
         end = date.today().replace(day=1)
     return list(rrule(MONTHLY, dtstart=start, until=end))
+
+def get_links(url, href_keys=[], text_keys=[]):
+    """ Returns all links on a page which contain keywords. """
+    response = requests.get(url)
+    # Forbidden request, try more valid user header.
+    if response.status_code == 403:
+        HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36'}
+        response = requests.get(url, headers=HEADERS)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    links = []
+    for link in soup.find_all('a'):
+        href = link.get('href')
+        if href is None:
+            continue
+        if all(key in href for key in href_keys) and all(key in link.text for key in text_keys):
+            links.append(urljoin(url, href.replace(' ', '%20')))
+    return links
 
 def extract_date(text, regex, datefmt):
     """ Extract a date from a text through regex and datefmt. """
@@ -431,6 +452,55 @@ class Indiana(Table):
         df = df.sort_values(by=['Date', 'Index'], ascending=True)
         OSBTable.save(Indiana, df)
 
+class Iowa(OSBTable):
+    pass
+
+class Kansas(OSBTable):
+    state = 'Kansas'
+    numeric_cols = ['Settled Wagers', 'Revenues', 'State Share']
+    
+    def __init__(self, link):
+        self.link = link
+        self.date = extract_date(link, r'\d{4}-\d{2}', '%Y-%m')
+        # Assuming Page 1 is always current month.
+        self.df = camelot.read_pdf(self.link, pages='1')[0].df
+        self.df = self.df.replace('', pd.NA).dropna(how='all')
+
+    def clean(self):
+        df = self.df
+        df = self.first_row_to_columns(df).reset_index(drop=True)
+        # Detect splits by 1st column keyword.
+        slices = self.slice_by_cond(df, df.iloc[:,0].str.contains('Subtotal'))
+        # Split and get new cols.
+        retail, online = self.split_by_rows(df, slices)
+        retail.insert(0, 'Sub-Category', 'Retail')
+        online.insert(0, 'Sub-Category', 'Online')
+        # Totals ended up weird.
+        totals = df.iat[-1, 0].split('\n')
+        totals = [x.strip() for x in totals]
+        totals_row = pd.DataFrame({'Sub-Category': 'Total',
+                                   'Provider': 'Totals',
+                                   'Settled Wagers': totals[2],
+                                   'Revenues': totals[3],
+                                   'State Share': totals[4]}, index=[0])
+        # Combine.
+        out_df = pd.concat([retail, online, totals_row])
+        out_df.rename(columns={'Casino': 'Provider', 'Provider': 'Sub-Provider'}, inplace=True)
+        out_df.insert(0, 'State', self.state)
+        out_df.insert(1, 'Category', self.category)
+        out_df.insert(3, 'Date', self.date)
+        out_df.reset_index(drop=True, inplace=True)
+        Table.to_numeric(out_df, self.numeric_cols)
+        return out_df.replace(0, pd.NA).dropna(how='all', subset=self.numeric_cols)
+    
+    @staticmethod
+    def save(df):
+        df = OSBTable.combine_old(Kansas, df)
+        df.index.name = 'Index'
+        df = df.sort_values(by=['Date', 'Sub-Category', 'Index'], ascending=True)
+        OSBTable.save(Kansas, df)
+    
+
 ### Scraping functions ###
 def scrape_arizona():
     print("Starting Arizona".center(50, '-'))
@@ -510,9 +580,27 @@ def scrape_indiana():
     Indiana.save_sports(pd.concat(sports_data))
     print("Finished Indiana".center(50, '-'))
 
+#def scrape_iowa():
+
+def scrape_kansas():
+    print("Starting Kansas".center(50, '-'))
+    dataframes = []
+    url = 'https://kslottery.com/publications/sports-monthly-revenues/'
+    links = get_links(url, href_keys=['media', 'revenue'])
+    for link in links:
+        print(f"Scraping {link}")
+        try:
+            dataframes.append(Kansas(link).clean())
+        except:
+            print("**Unable to scrape")
+    df = pd.concat(dataframes)
+    Kansas.save(df)
+    print("Finishing Kansas".center(50, '-'))
 
 if __name__ == '__main__':
     #scrape_arizona()
     #scrape_connecticut()
     #scrape_illinois()
-    scrape_indiana()
+    #scrape_indiana()
+    #scrape_iowa()
+    scrape_kansas()
