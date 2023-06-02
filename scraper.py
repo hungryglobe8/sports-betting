@@ -26,6 +26,13 @@ class Table:
     def categorize(col, categories):
         """ Returns a category column, which is helpful for sorting. """
         return col.astype('category').cat.set_categories(categories)
+    
+    @staticmethod
+    def to_numeric(df, cols):
+        """ Tries to make certain columns in a dataframe numeric. Removes commas. """
+        # Remove commas.
+        df[cols] = df[cols].replace(r',', '', regex=True)
+        df[cols] = df[cols].apply(pd.to_numeric, errors='coerce', axis=1)
 
 
 class OSBTable(Table):
@@ -53,7 +60,28 @@ class OSBTable(Table):
         df.to_excel(f'{cls.state} (OSB).xlsx', index=False)
 
 class IGamingTable(Table):
-    pass
+    category = 'iGaming'
+
+    @staticmethod
+    def combine_old(cls, df):
+        try:
+            file = f'{cls.state} (iGaming).xlsx'
+            print('Attempting to find old data')
+            matches = list(Path('Finished States').glob(file))
+            assert len(matches) <= 1, f"There should be one match for {file} in current or sub-directories\nMatches: {matches}"
+            print(f'Combining with "{matches[0]}"')
+            old_df = pd.read_excel(matches[0])
+            combined_df = pd.concat([old_df, df]).drop_duplicates()
+            print(f'New Data {df.shape} Old Data {old_df.shape}')
+            print(f'Combined {combined_df.shape}')
+            return combined_df
+        except (IndexError, FileNotFoundError):
+            print('No old data found')
+            return df.copy() 
+        
+    @staticmethod
+    def save(cls, df):
+        df.to_excel(f'{cls.state} (iGaming).xlsx', index=False)
 
 
 class Arizona(OSBTable):
@@ -150,6 +178,68 @@ class Arizona(OSBTable):
         df = df.sort_values(by=['Date', 'Provider', 'Sub-Category'], ascending=True)
         OSBTable.save(Arizona, df)
 
+class ConnecticutGaming(IGamingTable):
+    state = 'Connecticut'
+    url = "https://data.ct.gov/api/views/imqd-at3c/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
+    numeric_cols = ['Wagers', 'Amount Won', 'Gross Gaming Revenue', 'Promotional Credits', 'Adjusted Revenue']
+
+    def __init__(self):
+        self.df = pd.read_csv(self.url)
+
+    def clean(self):
+        out_df = pd.DataFrame({
+            'State': self.state,
+            'Category': self.category,
+            'Date': self.df["Month Ending"],
+            'Provider': self.df["Licensee"],
+            'Wagers': self.df["Wagers"],
+            'Amount Won': self.df["Patron Winnings"],
+            'Gross Gaming Revenue': self.df["Online Casino Gaming Win/(Loss)"],
+            'Promotional Credits': self.df["Promotional Coupons or Credits Wagered (3)"],
+            'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
+        })        
+        out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
+        Table.to_numeric(out_df, self.numeric_cols)
+        return out_df
+    
+    @staticmethod
+    def save(df):
+        df = IGamingTable.combine_old(ConnecticutGaming, df)
+        df = df.sort_values(by=['Date', 'Provider'], ascending=True)
+        IGamingTable.save(ConnecticutGaming, df)
+
+class ConnecticutSports(OSBTable):
+    state = 'Connecticut'
+    numeric_cols = ['Wagers', 'Amount Won', 'Online Sports Wagering', 'Gross Gaming Revenue', 'Promotional Credits', 'Adjusted Revenue']
+
+    def __init__(self, url, sub_category):
+        self.url = url
+        self.df = pd.read_csv(self.url)
+        self.sub_category = sub_category
+
+    def clean(self):
+        out_df = pd.DataFrame({
+            'State': self.state,
+            'Category': self.category,
+            'Sub-Category': self.sub_category,
+            'Date': self.df["Month Ending"],
+            'Provider': self.df["Licensee"],
+            'Wagers': self.df["Wagers"],
+            'Amount Won': self.df["Patron Winnings"],
+            'Online Sports Wagering': self.df["Online Sports Wagering Win/(Loss)"],
+            'Gross Gaming Revenue': self.df["Unadjusted Monthly Gaming Revenue"],
+            'Promotional Credits': self.df["Promotional Coupons or Credits Wagered (5)"],
+            'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
+        })
+        out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
+        Table.to_numeric(out_df, self.numeric_cols)
+        return out_df
+    
+    @staticmethod
+    def save(df):
+        df = OSBTable.combine_old(ConnecticutSports, df)
+        df = df.sort_values(by=['Date', 'Provider'], ascending=True)
+        OSBTable.save(ConnecticutSports, df)
 
 class Illinois(OSBTable):
     state = 'Illinois'
@@ -249,6 +339,18 @@ def scrape_arizona():
     Arizona.save(df)
     print("Finished Arizona".center(50, '-'))
 
+def scrape_connecticut():
+    print("Starting Connecticut".center(50, '-'))
+    print("Scraping Connecticut iGaming")
+    ConnecticutGaming.save(ConnecticutGaming().clean())
+    print("Scraping Connecticut OSB")
+    retail_sports_url = "https://data.ct.gov/api/views/yb54-t38r/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
+    retail_df = ConnecticutSports(retail_sports_url, 'Retail').clean()
+    online_sports_url = "https://data.ct.gov/api/views/xf6g-659c/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
+    online_df = ConnecticutSports(online_sports_url, 'Online').clean()
+    ConnecticutSports.save(pd.concat([retail_df, online_df]))
+    print("Finished Connecticut".center(50, '-'))
+    
 def scrape_illinois():
     print("Starting Illinois".center(50, '-'))
     driver = Illinois.selenium()
@@ -267,5 +369,5 @@ def scrape_illinois():
 
 if __name__ == '__main__':
     #scrape_arizona()
-    
+    scrape_connecticut()
     #scrape_illinois()
