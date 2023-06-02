@@ -12,7 +12,7 @@ from PyPDF2 import PdfReader
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-
+from urllib.error import HTTPError
 
 
 def get_dates(start, end=None):
@@ -42,6 +42,7 @@ def extract_date(text, regex, datefmt):
     """ Extract a date from a text through regex and datefmt. """
     return datetime.strptime(re.search(regex, text)[0], datefmt)
 
+
 class Table:
     @staticmethod
     def categorize(col, categories):
@@ -50,10 +51,11 @@ class Table:
     
     @staticmethod
     def to_numeric(df, cols):
-        """ Tries to make certain columns in a dataframe numeric. Removes commas. """
-        # Remove commas.
+        """ Tries to make certain columns in a dataframe numeric. Removes certain charcters. """
+        # Remove weird characters.
         df[cols] = df[cols].replace(r'[$,()]', '', regex=True)
         df[cols] = df[cols].apply(pd.to_numeric, errors='coerce', axis=1)
+        df[cols] = df[cols].round(2)
 
     @staticmethod
     def slice_by_cond(df, cond):
@@ -141,6 +143,7 @@ class IGamingTable(Table):
         df.to_excel(f'{cls.state} (iGaming).xlsx', index=False)
 
 
+### State Classes ###
 class Arizona(OSBTable):
     state = 'Arizona'
     url = "https://gaming.az.gov/resources/reports#event-wagering-report-archive"
@@ -499,7 +502,58 @@ class Kansas(OSBTable):
         df.index.name = 'Index'
         df = df.sort_values(by=['Date', 'Sub-Category', 'Index'], ascending=True)
         OSBTable.save(Kansas, df)
+
+class Maryland(OSBTable):
+    state = 'Maryland'
+    numeric_cols = ['Handle', 'Amount Won', 'Promotion Play', 'Other Deductions', 'Adjusted Gross Revenue']
+    ordered = ['State', 'Category', 'Sub-Category', 'Date', 'Provider', 'Handle', 'Amount Won', 'Promotion Play', 'Other Deductions', 'Adjusted Gross Revenue']
+
+    def __init__(self, link):
+        try:
+            self.df = pd.read_excel(link)
+        except HTTPError:
+            link = link.replace('Sports-Wagering', 'SW')
+            self.df = pd.read_excel(link)
+        self.link = link
+        self.date = extract_date(self.link, r'\w+-\d{4}', '%B-%Y')
+
+    def clean(self):
+        df = pd.read_excel(self.link, skiprows=3)
+        df = df.dropna(thresh=5, axis=1).dropna(subset='Licensee', how='any').dropna(thresh=5)
+        df.reset_index(drop=True, inplace=True)
+        slices = self.slice_by_cond(df, df['Licensee'] == 'Combined')
+        retail = df.iloc[slices[0]].copy()
+        retail['Sub-Category'] = 'Retail'
+        online = None
+        # Columns are different only take first df.
+        if self.date < datetime(2022, 9, 1):
+            rename_cols = {'Licensee': 'Provider',
+                           'Prizes Paid': 'Amount Won',
+                           'Taxable Win': 'Adjusted Gross Revenue'}
+        # Take both dfs if exist.
+        else:
+            rename_cols = {'Licensee': 'Provider',
+                           'Unnamed: 2': 'Handle',
+                           'Unnamed: 3': 'Amount Won',
+                           'Promotion': 'Promotion Play',
+                           'Other': 'Other Deductions',
+                           'Unnamed: 7': 'Adjusted Gross Revenue'}
+            if len(slices) == 2:
+                online = df.iloc[slices[1]].copy()
+                online = online.iloc[1:]
+                online['Sub-Category'] = 'Online'
+        combined = pd.concat([retail, online])
+        combined = combined.rename(columns=rename_cols)
+        combined['State'] = self.state
+        combined['Date'] = self.date
+        combined['Category'] = self.category
+        self.to_numeric(combined, self.numeric_cols)
+        return combined[self.ordered].reset_index(drop=True)
     
+    @staticmethod
+    def save(df):
+        df = OSBTable.combine_old(Maryland, df)
+        OSBTable.save(Maryland, df)
 
 ### Scraping functions ###
 def scrape_arizona():
@@ -597,10 +651,28 @@ def scrape_kansas():
     Kansas.save(df)
     print("Finishing Kansas".center(50, '-'))
 
+def scrape_maryland():
+    print("Starting Maryland".center(50, '-'))
+    data = []
+    for dt in get_dates(date(2022, 5, 1)):
+        try:
+            upload_month = dt + relativedelta(months=1)
+            upload_str = upload_month.strftime('%Y/%m')
+            data_str = dt.strftime('%B-%Y')
+            link = f'https://www.mdgaming.com/wp-content/uploads/{upload_str}/{data_str}-Sports-Wagering-Data.xlsx'
+            print(f"Scraping {link}")
+            data.append(Maryland(link).clean())
+        except:
+            print("**Unable to scrape")
+    df = pd.concat(data)
+    Maryland.save(df)
+    print("Ending Maryland".center(50, '+'))
+
 if __name__ == '__main__':
     #scrape_arizona()
     #scrape_connecticut()
     #scrape_illinois()
     #scrape_indiana()
     #scrape_iowa()
-    scrape_kansas()
+    #scrape_kansas()
+    scrape_maryland()
