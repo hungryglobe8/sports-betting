@@ -13,6 +13,8 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from urllib.error import HTTPError
+from itertools import chain
+
 
 
 def get_dates(start, end=None):
@@ -53,7 +55,7 @@ class Table:
     def to_numeric(df, cols):
         """ Tries to make certain columns in a dataframe numeric. Removes certain charcters. """
         # Remove weird characters.
-        df[cols] = df[cols].replace(r'[$,()]', '', regex=True)
+        df[cols] = df[cols].replace(r'[$,)]', '', regex=True).replace(r'[(]', '-', regex=True)
         df[cols] = df[cols].apply(pd.to_numeric, errors='coerce', axis=1)
         df[cols] = df[cols].round(2)
 
@@ -555,6 +557,119 @@ class Maryland(OSBTable):
         df = OSBTable.combine_old(Maryland, df)
         OSBTable.save(Maryland, df)
 
+class Michigan:
+    state = 'Michigan'
+
+    def __init__(self, df):
+        self.df = df.replace(r'[\*\n]', '', regex=True)
+        self.year = re.search(r'\d{4}', self.df.columns[1])[0]
+
+    def clean(self, jump):
+        data = []
+        # TODO - Totals row should be similar logic.
+        for month, *casinos in self.body[:-1].itertuples(index=False):
+            idx = 0
+            date = datetime.strptime(f'{self.year}-{month}', '%Y-%B')
+            while idx < len(casinos) - 2:
+                data.append({
+                    'State': self.state,
+                    'Category': self.category,
+                    'Sub-Category': self.subcategory,
+                    'Date': date,
+                    **self.header.iloc[idx // jump],
+                    **self.get_next(casinos, idx)
+                })
+                idx += jump
+        out_df = pd.DataFrame(data)
+        return out_df
+    
+class MichiganRetailSports(Michigan, OSBTable):
+    def __init__(self, link):
+        # PDFs are easier to parse than encrypted Excel.
+        self.df = self.first_row_to_columns(camelot.read_pdf(link)[0].df).replace('', pd.NA)
+        self.category = 'Online Sports Betting (OSB)'
+        self.subcategory = 'Retail'
+        
+        super().__init__(self.df)
+
+        self.header = pd.DataFrame(self.df.iloc[0].dropna().str.title()).reset_index(drop=True)
+        self.header.columns = ['Provider']
+        self.body = self.first_row_to_columns(self.df.iloc[1:16])
+        # Edge case where extra dates are included.
+        self.body['Month'] = self.body['Month'].apply(lambda x: x.split(' ')[0])
+
+    def clean(self):
+        return super().clean(4)
+
+    def get_next(self, data, idx):
+        return {
+            'Total Handle': data[idx],
+            'Total Gross Receipts': data[idx+1],
+            'Adjusted Gross Receipts': data[idx+2],
+            'State Tax': data[idx+3]
+        }
+
+class MichiganOnlineSports(Michigan, OSBTable):
+    def __init__(self, link):
+        self.df = pd.read_excel(link, sheet_name=0)
+        self.category = 'Online Sports Betting (OSB)'
+        self.subcategory = 'Online'
+        
+        super().__init__(self.df)
+
+        self.header = (self.df.iloc[:3, 1:-1].
+            dropna(how='all', axis=1).
+            T.
+            reset_index(drop=True)
+        )
+        self.header.columns = ['Operators', 'Provider', 'Sub-Provider']
+        self.body = (self.first_row_to_columns(
+            self.df.iloc[4:18].
+            replace(0, pd.NA).
+            dropna(thresh=4)
+        ))
+        
+    def clean(self):
+        return super().clean(4)
+
+    def get_next(self, data, idx):
+        return {
+            'Total Handle': data[idx],
+            'Total Gross Receipts': data[idx+1],
+            'Adjusted Gross Receipts': data[idx+2],
+            'State Tax': data[idx+3]
+        }
+
+class MichiganGaming(Michigan, IGamingTable):
+    def __init__(self, link, sheet):
+        self.df = pd.read_excel(link, sheet_name=sheet)
+        self.category = 'iGaming'
+        self.subcategory = None
+
+        super().__init__(self.df)
+
+        self.header = (self.df.iloc[:3, 1:-2].
+            dropna(how='all', axis=1).
+            T.
+            reset_index(drop=True)
+        )
+        self.header.columns = ['Operators', 'Provider', 'Sub-Provider']
+        self.body = (self.first_row_to_columns(
+            self.df.iloc[4:18].
+            replace(0, pd.NA).
+            dropna(thresh=4)
+        ))
+
+    def clean(self):
+        return super().clean(3).replace(0, pd.NA).dropna(how='all', axis=1)
+
+    def get_next(self, data, idx):
+        return {
+            'Total Gross Receipts': data[idx],
+            'Adjusted Gross Receipts': data[idx+1],
+            'State Tax': data[idx+2]
+        }
+
 ### Scraping functions ###
 def scrape_arizona():
     print("Starting Arizona".center(50, '-'))
@@ -668,6 +783,71 @@ def scrape_maryland():
     Maryland.save(df)
     print("Ending Maryland".center(50, '+'))
 
+def scrape_michigan():
+    print("Starting Michigan".center(50, '-'))
+    data = []
+    url = 'https://www.michigan.gov/mgcb/detroit-casinos/resources/revenues-and-wagering-tax-information'
+    retail_osb = get_links(url, text_keys=['Retail Sports Betting', 'PDF'])
+    online_osb = get_links(url, text_keys=['Internet Sports Betting'])
+    for link in retail_osb:
+        try:
+            print(f"Scraping {link}")
+            data.append(MichiganRetailSports(link).clean())
+        except:
+            print("**Unable to scrape")
+    for link in online_osb:
+        try:
+            print(f"Scraping {link}")
+            data.append(MichiganOnlineSports(link).clean())
+        except:
+            print("**Unable to scrape")
+    df = pd.concat(data)
+    df = df[['State', 'Category', 'Sub-Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
+             'Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
+    save(df, 'Michigan (OSB).xlsx', numeric_cols=['Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
+
+    data = []
+    internet_games = get_links(url, text_keys=['Internet Gaming', 'Excel'])
+    for link, sheet in zip(internet_games, ['Internet Gaming 2023', 'Internet Gaming 2022', 'Internet Gaming 2021']):
+        try:
+            print(f"Scraping {link}, {sheet}")
+            data.append(MichiganGaming(link, sheet).clean())
+        except:
+            print("**Unable to scrape")
+    df = pd.concat(data)
+    df = df[['State', 'Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
+             'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
+    save(df, 'Michigan (iGaming).xlsx', numeric_cols=['Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
+    print("Ending Michigan".center(50, '+'))
+
+
+def save(df, filename, numeric_cols=None):
+    # Clean numeric data and remove blank rows.
+    if numeric_cols:
+        Table.to_numeric(df, numeric_cols)
+        df = df.replace(0, pd.NA).dropna(how='all', subset=numeric_cols)
+    # Look up old data, if exists.
+    try:
+        print('Attempting to find old data')
+        matches = list(Path('Finished States').glob(filename))
+        assert len(matches) <= 1, f"There should be one match for {filename} in current or sub-directories\nMatches: {matches}"
+        print(f'Combining with "{matches[0]}"')
+        old_df = pd.read_excel(matches[0])
+        combined_df = pd.concat([old_df, df]).drop_duplicates()
+        print(f'New Data {df.shape} Old Data {old_df.shape}')
+        print(f'Combined {combined_df.shape}')
+    except (IndexError, FileNotFoundError):
+        print('No old data found')
+        combined_df = df.copy()
+    # Sort if columns are present. Index is usually somewhat ordered from scraping.
+    combined_df = combined_df.reset_index(drop=True)
+    combined_df.index.name = 'Index'
+    sorting = [x for x in ['Date', 'Sub-Category'] if x in combined_df.columns]
+    sorting.append('Index')
+    combined_df = combined_df.sort_values(by=sorting, ascending=True)
+    combined_df.to_excel(filename, index=False)
+
+
 if __name__ == '__main__':
     #scrape_arizona()
     #scrape_connecticut()
@@ -675,4 +855,5 @@ if __name__ == '__main__':
     #scrape_indiana()
     #scrape_iowa()
     #scrape_kansas()
-    scrape_maryland()
+    #scrape_maryland()
+    scrape_michigan()
