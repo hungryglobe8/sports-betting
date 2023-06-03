@@ -133,7 +133,6 @@ class Table:
         """ Repeat rows of a dataframe where a condition is met. """
         return pd.concat([df, df.loc[cond]]).sort_index().reset_index(drop=True)
 
-
 class OSBTable(Table):
     category = 'Online Sports Betting (OSB)'
     
@@ -181,7 +180,6 @@ class IGamingTable(Table):
     @staticmethod
     def save(cls, df):
         df.to_excel(f'{cls.state} (iGaming).xlsx', index=False)
-
 
 ### State Classes ###
 class Arizona(OSBTable):
@@ -496,7 +494,121 @@ class Indiana(Table):
         OSBTable.save(Indiana, df)
 
 class Iowa(OSBTable):
-    pass
+    state = 'Iowa'
+    numeric_cols = ['Sports Wagering Net Receipts', 'Sports Wagering Handle', 'Sports Wagering Payouts', 'Retail Net Receipts', 'Retail Handle', 
+                    'Retail Payouts', 'Internet Net Receipts', 'Internet Handle', 'Internet Payouts', 'State Tax']
+
+    def __init__(self, table, dt, sub_category, keyword):
+        self.df = table.df
+        self.df.iloc[:,0] = self.df.iloc[:,0].str.replace('\\', 'I')
+        self.date = extract_date(dt, r'\w+ \d{4}', '%B %Y')
+        self.sub_category = sub_category
+        self.keyword = keyword
+
+    def clean(self):
+        df = self.df
+        # Detect splits by 1st column keyword
+        slices = self.slice_by_cond(df, df.iloc[:,0].str.casefold() == self.keyword.casefold())
+        # Split and get new cols.
+        split = self.split_by_rows(df, slices)
+        for i, x in enumerate(split):
+            split[i] = self.first_row_to_columns(x.T)
+        # Combine.
+        out_df = (pd.concat(split).
+                  replace(r'^\s*$', pd.NA, regex=True).
+                  dropna(how='all'))
+        out_df.rename(columns={out_df.columns[0]: "Provider"}, inplace=True)
+        out_df.insert(0, 'State', self.state)
+        out_df.insert(1, 'Category', self.category)
+        out_df.insert(2, 'Sub-Category', self.sub_category)
+        out_df.insert(3, 'Date', self.date)
+        out_df.reset_index(drop=True, inplace=True)
+        # Remove empty Providers.
+        out_df.dropna(how='any', subset='Provider', inplace=True)
+        # Weird TOTAL rows.
+        out_df.dropna(subset='Date', inplace=True)
+        # Fixes weird pdf column mistakes.
+        self.fix_whitespace(out_df, 'Provider')
+        # Use Title instead of ALLCAPS.
+        out_df.columns = out_df.columns.str.title()
+        return out_df
+
+    @staticmethod
+    def fix_whitespace(df, col):
+        """ Double space belongs to the next row. Removes \n. """
+        mistake = None
+        for idx, entry in enumerate(df[col]):
+            if pd.isna(entry):
+                entry, next_entry = df.at[idx+1, col].split('  ')
+                df.at[idx+1, col] = next_entry
+            if mistake:
+                entry = f'{mistake} {entry}'
+                mistake = None
+            # Double space is a mistake.
+            if '  ' in entry:
+                entry, mistake = entry.split('  ')
+            df.at[idx, col] = entry.replace('\n', ' ').replace('  ', ' ')
+    
+    @staticmethod
+    def get_links(url, keyword):
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        links = []
+        for link in soup.find_all('a'):
+            href = link.get('href')
+            if keyword in href:
+                # Specific to Iowa for capturing right links.
+                if 'Revenue' in link.text and 'FYTD' not in link.text:
+                    links.append(urljoin(url, href))
+        return links
+
+    @staticmethod
+    def parse_pdf(url):
+        """ Open a pdf, read titles, parse tables, and close pdf. """
+        path = Path('temp.pdf')
+        path.write_bytes(requests.get(url).content)
+
+        pdf = PdfReader(str(path))
+        parsed = []
+        for idx, page in enumerate(pdf.pages):
+            try:
+                parsed.append(Iowa.parse_page(str(path), page, idx))
+            except:
+                print(f'Unable to parse page {idx + 1} from {url}')
+        path.unlink()
+        return parsed
+
+    @staticmethod
+    def parse_page(path, page, idx):
+        """ 
+        Parse a single page of the pdf. 
+
+        Title is first non-empty line.
+        Title contains Category and Date.
+        Category determines Online or Sports Type.
+        """
+        title = Iowa.get_title(page)
+        category, date = title.split(' - ')
+        # Skip full year for now.
+        if "FY" in date:
+            raise Exception(f"FY not currently being parsed")
+        table = camelot.read_pdf(path, pages=str(idx + 1))[0]
+        # Check that category matches up.
+        if "ONLINE SPORTS WAGERING" in category:
+            return Iowa(table, date, 'Online', "INTERNET PAYOUTS")
+        elif "SPORTS WAGERING REVENUE" in category:
+            return Iowa(table, date, 'Retail', "STATE TAX")
+        else:
+            raise Exception(f"{category} - {date} not found")
+        
+    @staticmethod
+    def get_title(page):
+        """ Title is first nonempty line found on page. Replaces '--' and removes [$0.] """
+        for line in page.extract_text().split('\n'):
+            line = line.lstrip('$0.')
+            if not line.isspace() and any(x in line for x in ['SPORTS WAGERING REVENUE', 'ONLINE SPORTS WAGERING']):
+                line = line.replace('--', '-')
+                return line.strip()
 
 class Kansas(OSBTable):
     state = 'Kansas'
@@ -1080,7 +1192,26 @@ def scrape_indiana():
     Indiana.save_sports(pd.concat(sports_data))
     print("Finished Indiana".center(50, '-'))
 
-#def scrape_iowa():
+def scrape_iowa():
+    print("Starting Iowa".center(50, '-'))
+    url = 'https://irgc.iowa.gov/publications-reports/sports-wagering-revenue'
+    data = []
+    historical = Iowa.get_links(f'{url}/archived-sports-revenue', 'media')
+    current = Iowa.get_links(url, 'media')
+    for link in [*historical, *current]:
+        print(f"Scraping {link}")
+        try:
+            parsed = Iowa.parse_pdf(link)
+            for p in parsed:
+                data.append(p.clean())
+        except BaseException as e:
+            print(e.args)
+            print("*Unable to scrape")
+    df = pd.concat(data)
+    # Weird TOTAL rows.
+    #df.dropna(subset='Date', inplace=True)
+    save(df, 'Iowa (OSB).xlsx', numeric_cols=Iowa.numeric_cols)
+    print("Ending Iowa".center(50, '+'))
 
 def scrape_kansas():
     print("Starting Kansas".center(50, '-'))
@@ -1226,11 +1357,11 @@ if __name__ == '__main__':
     #scrape_connecticut()
     #scrape_illinois()
     #scrape_indiana()
-    #scrape_iowa()
+    scrape_iowa()
     #scrape_kansas()
     #scrape_maryland()
     #scrape_michigan()
     ##scrape_newjersey()
     #scrape_newyork()
     #scrape_pennsylvania()
-    scrape_westvirginia()
+    #scrape_westvirginia()
