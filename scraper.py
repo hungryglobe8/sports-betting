@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, unquote
 from urllib.error import HTTPError
 from itertools import chain
-
+from io import BytesIO
+from zipfile import ZipFile
 
 
 def get_dates(start, end=None):
@@ -863,7 +864,6 @@ class Pennsylvania:
                 idx += 1
         return pd.DataFrame(out_df)
 
-
 class PennsylvaniaGaming(Pennsylvania, IGamingTable):
     numeric_cols = ['Wagers Received', 'Amount Won', 'Gross Revenue']
 
@@ -890,7 +890,6 @@ class PennsylvaniaGaming(Pennsylvania, IGamingTable):
                 'Wagers Received': [islots_1, ibanking_1, pd.NA],
                 'Amount Won': [islots_2, pd.NA, pd.NA],
                 'Gross Revenue': [islots_3, ibanking_3, nbanking_3]}
-    
 
 class PennsylvaniaSports(Pennsylvania, OSBTable):
     numeric_cols = ['Handle', 'Revenue', 'Promotional Credits', 'Gross Revenue']
@@ -921,6 +920,78 @@ class PennsylvaniaSports(Pennsylvania, OSBTable):
                 'Promotional Credits': [total_3, pd.NA, online_3],
                 'Gross Revenue': [total_4, retail_4, online_4]}
 
+class WestVirgina:
+    state = 'West Virginia'
+
+    def __init__(self, zipfile):
+        self.zip = zipfile
+        self.filenames = [file.filename for file in self.zip.filelist]
+
+class WestVirginiaGaming(WestVirgina, IGamingTable):
+    numeric_cols = ['Wagers', 'Amount Won', 'Revenue']
+
+    def __init__(self, zipfile):
+        super().__init__(zipfile)
+        self.sheetnames = ['Mountaineer', 'Charles Town', 'Greenbrier']
+    
+    def clean(self):
+        dataframes = []
+        for file in self.filenames:
+            for sheet in self.sheetnames:
+                df = pd.read_excel(self.zip.open(file), sheet_name=sheet, skiprows=2)
+                # Clean columns.
+                df.columns = df.columns.str.rstrip('* ')
+                df = df.rename(columns={'Week Ending': 'Date', 'Paids': 'Amount Won'})
+                # Get relevant dates.
+                df = df.replace(r'[\* ]', '', regex=True)
+                df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y', errors='coerce').dropna()
+                grouped_df = df.groupby(pd.Grouper(key='Date', freq='MS')).sum()
+                grouped_df.reset_index(inplace=True)
+                grouped_df.insert(0, 'State', self.state)
+                grouped_df.insert(1, 'Category', self.category)
+                grouped_df.insert(3, 'Provider', sheet)
+                dataframes.append(grouped_df)
+        return pd.concat(dataframes)[['State', 'Category', 'Date', 'Provider', 'Wagers', 'Amount Won', 'Revenue']]
+
+class WestVirginiaSports(WestVirgina, OSBTable):
+    numeric_cols = ['Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']
+
+    def __init__(self, zipfile):
+        super().__init__(zipfile)
+        self.sheetnames = ['Mountaineer', 'Wheeling', 'Mardi Gras', 'Charles Town', 'Greenbrier']
+
+    def clean(self):
+        dataframes = []
+        for file in self.filenames:
+            for sheet in self.sheetnames:
+                df = pd.read_excel(self.zip.open(file), sheet_name=sheet, skiprows=3)
+                df = df.rename(columns={df.columns[0]: 'Date'})
+                # Get relevant dates.
+                df = df.replace(r'[\* ]', '', regex=True)
+                df['Date'] = pd.to_datetime(df['Date'], format='%m/%d/%Y', errors='coerce').dropna()
+                df = df.dropna(how='all', axis=1).dropna()
+                
+                # Parse sub-categories.
+                retail = df.iloc[:,:5]
+                retail.columns = ['Date', 'Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']
+                retail.insert(0, 'Sub-Category', 'Retail')
+                online = df.iloc[:,[0,5,6,7,8]]
+                online.columns = ['Date', 'Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']
+                online.insert(0, 'Sub-Category', 'Online')
+                total = df.iloc[:,[0,9,10,11,12]]
+                total.columns = ['Date', 'Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']
+                total.insert(0, 'Sub-Category', 'Total')
+                combined_df = pd.concat([retail, online, total], ignore_index=True)
+
+                # Set Date as index for Grouper.
+                combined_df = combined_df.set_index('Date')
+                grouped_df = combined_df.groupby([pd.Grouper(freq='MS'), 'Sub-Category']).sum()
+                grouped_df.reset_index(inplace=True)
+                grouped_df.insert(0, 'State', self.state)
+                grouped_df.insert(1, 'Category', self.category)
+                grouped_df.insert(4, 'Provider', sheet)
+                dataframes.append(grouped_df)
+        return pd.concat(dataframes)[['State', 'Category', 'Sub-Category', 'Date', 'Provider', 'Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']]
 
 ### Scraping functions ###
 def scrape(data, cls, *args):
@@ -1131,6 +1202,24 @@ def scrape_pennsylvania():
     
     print("Ending Pennsylvania".center(50, '+'))
 
+def scrape_westvirginia():
+    print("Starting West Virgina".center(50, '-'))
+    url = 'https://wvlottery.com/requests/2020-06-15-1110/?report=new'
+    sports_zip = get_links(url, text_keys='Sports Wagering')[0]
+    igaming_zip = get_links(url, text_keys='iGaming')[0]
+
+    HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36'}
+    szip = ZipFile(BytesIO(requests.get(sports_zip, headers=HEADERS).content))
+    izip = ZipFile(BytesIO(requests.get(igaming_zip, headers=HEADERS).content))
+
+    print(f"Scraping {sports_zip}")
+    df = WestVirginiaSports(szip).clean()
+    save(df, 'West Virginia (OSB).xlsx', numeric_cols=WestVirginiaSports.numeric_cols)
+
+    print(f"Scraping {igaming_zip}")
+    df = WestVirginiaGaming(izip).clean()
+    save(df, 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
+    print("Ending West Virgina".center(50, '+'))
 
 if __name__ == '__main__':
     #scrape_arizona()
@@ -1143,4 +1232,5 @@ if __name__ == '__main__':
     #scrape_michigan()
     ##scrape_newjersey()
     #scrape_newyork()
-    scrape_pennsylvania()
+    #scrape_pennsylvania()
+    scrape_westvirginia()
