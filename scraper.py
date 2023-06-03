@@ -74,7 +74,8 @@ def save(df, filename, numeric_cols=None):
     combined_df = combined_df.reset_index(drop=True)
     combined_df.index.name = 'Index'
     if 'Sub-Category' in combined_df.columns:
-        combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], ['Retail', 'Online', 'Online Poker', 'Online Casino', 'Total'])
+        sorting = ['Retail', 'Online', 'Online Poker', 'Online Casino', 'Total', 'Interactive Slots', 'Banking Tables', 'Non-Banking Tables (Poker)']
+        combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], sorting)
     sorting = [x for x in ['Date', 'Provider', 'Sub-Category'] if x in combined_df.columns]
     sorting.append('Index')
     combined_df = combined_df.sort_values(by=sorting, ascending=True)
@@ -734,7 +735,7 @@ class NewJersey:
             textpage = page.get_textpage()
             casino = ''
             # Using a flexible bound has proven the most successful. 2022 formatting in particular is unreliable.
-            bound = 1000
+            bound = 1100
             while casino == '':
                 bound -= 50
                 text = textpage.get_text_bounded(bottom=bound).removeprefix('INTERNET WIN - CURRENT MONTH')
@@ -837,6 +838,88 @@ class NewYork(OSBTable):
         #providers_filt = ['BetMGM', 'FanDuel', 'Caesars', 'DraftKings']
         #df['Provider'] = df['Provider'].apply(lambda x: x if x in providers_filt else 'Others')
         return df
+
+class Pennsylvania:
+    state = 'Pennsylvania'
+
+    def __init__(self, link):
+        self.link = link
+        self.df = pd.read_excel(link, skiprows=3)
+
+    def get_providers(self, key):
+        """ Get values above keys as providers. """
+        indexes = self.df[self.df.iloc[:,0] == key].index - 1
+        return self.df.iloc[indexes,0].to_list()
+
+    def clean(self):
+        """ Clean an Excel sheet. clean_row should change for type of table. """
+        out_df = []
+        for month, row in self.body.iterrows():
+            month = datetime.strptime(month, '%B %Y')
+            i_row = iter(row)
+            idx = 0
+            while idx < len(self.providers):
+                out_df.append(self.clean_row(idx, i_row, month))
+                idx += 1
+        return pd.DataFrame(out_df)
+
+
+class PennsylvaniaGaming(Pennsylvania, IGamingTable):
+    numeric_cols = ['Wagers Received', 'Amount Won', 'Gross Revenue']
+
+    def __init__(self, link):
+        super().__init__(link)
+        self.parse_columns = ['Wagers Received', 'Amount Won', 'Gross Revenue', 'Revenue (Rake & Tournament Fees)']
+        self.providers = self.get_providers('Interactive Slots')
+        self.body = self.df.loc[self.df.isin(self.parse_columns).any(axis=1)]
+        self.body = self.body.dropna(how='all', axis=1).T.iloc[1:-1]
+
+    def clean(self):
+        return super().clean().explode(['Sub-Category', 'Wagers Received', 'Amount Won', 'Gross Revenue'])
+
+    def clean_row(self, idx, i_row, month):
+        # 1 - wagers, 2 - amount won, 3 - revenue
+        islots_1, islots_2, islots_3 = next(i_row), next(i_row), next(i_row)
+        ibanking_1, ibanking_3 = next(i_row), next(i_row)
+        nbanking_3 = next(i_row)
+        return {'State': self.state,
+                'Category': self.category,
+                'Sub-Category': ['Interactive Slots', 'Banking Tables', 'Non-Banking Tables (Poker)'],
+                'Date': month,
+                'Provider': self.providers[idx],
+                'Wagers Received': [islots_1, ibanking_1, pd.NA],
+                'Amount Won': [islots_2, pd.NA, pd.NA],
+                'Gross Revenue': [islots_3, ibanking_3, nbanking_3]}
+    
+
+class PennsylvaniaSports(Pennsylvania, OSBTable):
+    numeric_cols = ['Handle', 'Revenue', 'Promotional Credits', 'Gross Revenue']
+
+    def __init__(self, link):
+        super().__init__(link)
+        self.df.iloc[:,0] = self.df.iloc[:,0].str.rstrip('*')
+        self.parse_columns = ['Handle', 'Revenue', 'Promotional Credits', 'Gross Revenue (Taxable)']
+        self.providers = self.get_providers('Total Sports Wagering')
+        self.body = self.df.loc[self.df.isin(self.parse_columns).any(axis=1)]
+        self.body = self.body.dropna(how='all', axis=1).T.iloc[1:-3]
+
+    def clean(self):
+        return super().clean().explode(['Sub-Category', 'Handle', 'Revenue', 'Promotional Credits', 'Gross Revenue'])
+
+    def clean_row(self, idx, i_row, month):
+        # 1 - handle, 2 - revenue, 3 - promotional, 4 - gross revenue
+        total_1, total_2, total_3, total_4 = next(i_row), next(i_row), next(i_row), next(i_row)
+        retail_1, retail_4 = next(i_row), next(i_row)
+        online_1, online_2, online_3, online_4 = next(i_row), next(i_row), next(i_row), next(i_row)
+        return {'State': self.state,
+                'Category': self.category,
+                'Sub-Category': ['Total', 'Retail', 'Online'],
+                'Date': month,
+                'Provider': self.providers[idx],
+                'Handle': [total_1, retail_1, online_1],
+                'Revenue': [total_2, retail_4, online_2],
+                'Promotional Credits': [total_3, pd.NA, online_3],
+                'Gross Revenue': [total_4, retail_4, online_4]}
 
 
 ### Scraping functions ###
@@ -1028,6 +1111,26 @@ def scrape_newyork():
     save(df, 'New York (OSB).xlsx', numeric_cols=['GGR'])
     print("Ending New York".center(50, '+'))
 
+def scrape_pennsylvania():
+    print("Starting Pennsylvania".center(50, '-'))
+    base_url = "https://gamingcontrolboard.pa.gov/files/revenue"
+    data = []
+    for i in range(2019, 2023):
+        link = f'{base_url}/Gaming_Revenue_Monthly_Interactive_Gaming_FY{i}{i+1}.xlsx'
+        scrape(data, PennsylvaniaGaming, link)
+    df = pd.concat(data)
+    save(df, 'Pennsylvania (iGaming).xlsx', numeric_cols=PennsylvaniaGaming.numeric_cols)
+
+    data = []
+    for i in range(2019, 2023):
+        link = f'{base_url}/Gaming_Revenue_Monthly_Sports_Wagering_FY{i}{i+1}.xlsx'
+        scrape(data, PennsylvaniaSports, link)   
+    df = pd.concat(data)
+    #df.sort_values(by=['Date', 'Index', 'Sub-Category'])
+    save(df, 'Pennsylvania (OSB).xlsx', numeric_cols=PennsylvaniaSports.numeric_cols) 
+    
+    print("Ending Pennsylvania".center(50, '+'))
+
 
 if __name__ == '__main__':
     #scrape_arizona()
@@ -1038,5 +1141,6 @@ if __name__ == '__main__':
     #scrape_kansas()
     #scrape_maryland()
     #scrape_michigan()
-    #scrape_newjersey()
-    scrape_newyork()
+    ##scrape_newjersey()
+    #scrape_newyork()
+    scrape_pennsylvania()
