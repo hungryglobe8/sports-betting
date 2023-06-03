@@ -858,12 +858,7 @@ class NewJersey:
     
     def get_tables(self):
         """ Open pdf through camelot, getting all tables. """
-        return camelot.read_pdf(self.link, pages='all', line_scale=25)
-
-    def get_first_table(self, page_num):
-        """ Open camelot on page, getting first table. """
-        tables = camelot.read_pdf(self.link, pages=str(page_num+1))
-        return tables[0].df
+        return camelot.read_pdf(self.link, pages='all', line_scale=25)  #Maybe 50
 
 class NewJerseyGaming(NewJersey, IGamingTable):
     def clean(self):
@@ -902,9 +897,12 @@ class NewJerseySports(NewJersey, OSBTable):
         out = []
         casinos = self.get_casinos()
         tables = self.get_tables()
+        tables_per_page = len(tables) // len(casinos)
+        print(tables_per_page)
         for i, casino in zip(range(num_pages), casinos):
-            monthly_retail = self.get_value_from_table(tables, i*2, (3, -1))
-            monthly_internet = self.get_value_from_table(tables, 1+i*2, (3, -1))
+            table_idx = tables_per_page * i
+            monthly_retail = self.get_value_from_table(tables, table_idx, (3, -1))
+            monthly_internet = self.get_value_from_table(tables, table_idx+2, (3, -1))
             out.append({'State': self.state,
                         'Category': self.category,
                         'Sub-Category': ['Retail', 'Online'],
@@ -919,7 +917,7 @@ class NewJerseySports(NewJersey, OSBTable):
     def get_value_from_table(self, tables, table_num, coords):
         """ Open camelot table, extract value from coordinates. """
         df = tables[table_num].df
-        return df.iat[coords]
+        return df.iat[coords].lstrip('$').strip()
     
 class NewYork(OSBTable):
     state = 'New York'
@@ -1208,8 +1206,6 @@ def scrape_iowa():
             print(e.args)
             print("*Unable to scrape")
     df = pd.concat(data)
-    # Weird TOTAL rows.
-    #df.dropna(subset='Date', inplace=True)
     save(df, 'Iowa (OSB).xlsx', numeric_cols=Iowa.numeric_cols)
     print("Ending Iowa".center(50, '+'))
 
@@ -1286,12 +1282,12 @@ def scrape_newjersey():
     print("Starting New Jersey".center(50, '-'))
     base_url = "https://www.nj.gov/oag/ge/docs/Financials"
     data = []
-    #for dt in get_dates(date(2021, 1, 1)):
-    #    month, year = dt.strftime('%B %Y').split()
-    #    link = f'{base_url}/IGRTaxReturns/{year}/{month}{year}.pdf'
-    #    scrape(data, NewJerseyGaming, link)
-    #df = pd.concat(data)
-    #save(df, 'New Jersey (iGaming).xlsx', numeric_cols=['Internet Gaming Win'])
+    for dt in get_dates(date(2021, 1, 1)):
+        month, year = dt.strftime('%B %Y').split()
+        link = f'{base_url}/IGRTaxReturns/{year}/{month}{year}.pdf'
+        scrape(data, NewJerseyGaming, link)
+    df = pd.concat(data)
+    save(df, 'New Jersey (iGaming).xlsx', numeric_cols=['Internet Gaming Win'])
     
     data = []
     for dt in get_dates(date(2021, 1, 1)):
@@ -1357,11 +1353,11 @@ if __name__ == '__main__':
     #scrape_connecticut()
     #scrape_illinois()
     #scrape_indiana()
-    scrape_iowa()
+    #scrape_iowa()
     #scrape_kansas()
     #scrape_maryland()
     #scrape_michigan()
-    ##scrape_newjersey()
+    scrape_newjersey()
     #scrape_newyork()
     #scrape_pennsylvania()
     #scrape_westvirginia()
