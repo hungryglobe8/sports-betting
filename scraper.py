@@ -9,6 +9,7 @@ from pathlib import Path
 import camelot
 import re
 from PyPDF2 import PdfReader
+import pypdfium2 as pdfium
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -43,6 +44,41 @@ def get_links(url, href_keys=[], text_keys=[]):
 def extract_date(text, regex, datefmt):
     """ Extract a date from a text through regex and datefmt. """
     return datetime.strptime(re.search(regex, text)[0], datefmt)
+
+def save(df, filename, numeric_cols=None):
+    """ 
+    Save a dataframe to a file.
+    
+    Cleans up the numeric data by removing [($,)] and making negative where needed.
+    
+    Checks for existing file with filename to keep old data intact.
+    """
+    # Clean numeric data and remove blank rows.
+    if numeric_cols:
+        Table.to_numeric(df, numeric_cols)
+        df = df.replace(0, pd.NA).dropna(how='all', subset=numeric_cols)
+    # Look up old data, if exists.
+    try:
+        print('Attempting to find old data')
+        matches = list(Path('Finished States').glob(filename))
+        assert len(matches) <= 1, f"There should be one match for {filename} in current or sub-directories\nMatches: {matches}"
+        print(f'Combining with "{matches[0]}"')
+        old_df = pd.read_excel(matches[0])
+        combined_df = pd.concat([old_df, df]).drop_duplicates()
+        print(f'New Data {df.shape} Old Data {old_df.shape}')
+        print(f'Combined {combined_df.shape}')
+    except (IndexError, FileNotFoundError):
+        print('No old data found')
+        combined_df = df.copy()
+    # Sort if columns are present. Index is usually somewhat ordered from scraping.
+    combined_df = combined_df.reset_index(drop=True)
+    combined_df.index.name = 'Index'
+    if 'Sub-Category' in combined_df.columns:
+        combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], ['Online Poker', 'Online Casino', 'Total'])
+    sorting = [x for x in ['Date', 'Provider', 'Sub-Category'] if x in combined_df.columns]
+    sorting.append('Index')
+    combined_df = combined_df.sort_values(by=sorting, ascending=True)
+    combined_df.to_excel(filename, index=False)
 
 
 class Table:
@@ -670,7 +706,116 @@ class MichiganGaming(Michigan, IGamingTable):
             'State Tax': data[idx+2]
         }
 
+class NewJersey:
+    state = 'New Jersey'
+        
+    def __init__(self, link):
+        self.link = link
+        self.date = extract_date(self.link, '\w+\d{4}', '%B%Y')
+        self.temp_storage = 'temp.pdf'
+
+    def read_pdf(self):
+        """ Saves a content stream to temp_storage. """
+        Path(self.temp_storage).write_bytes(requests.get(self.link).content)
+
+    def close_pdf(self):
+        """ Closes temp_storage. """
+        Path(self.temp_storage).unlink()
+
+    def get_pages(self):
+        """ Gets the number of pages from temp storage. """
+        return len(PdfReader(self.temp_storage).pages)
+
+    def get_casinos(self):
+        """ Open pdfium on page, getting casino header text only. """
+        pdf = pdfium.PdfDocument(self.temp_storage)
+        casinos = []
+        for page in pdf:
+            textpage = page.get_textpage()
+            casino = ''
+            # Using a flexible bound has proven the most successful. 2022 formatting in particular is unreliable.
+            bound = 1000
+            while casino == '':
+                bound -= 50
+                text = textpage.get_text_bounded(bottom=bound).removeprefix('INTERNET WIN - CURRENT MONTH')
+                casino = text.split('MONTHLY')[0].replace('\r\n', '').title()
+            casinos.append(casino)
+        return casinos
+    
+    def get_tables(self):
+        """ Open pdf through camelot, getting all tables. """
+        return camelot.read_pdf(self.link, pages='all', line_scale=25)
+
+    def get_first_table(self, page_num):
+        """ Open camelot on page, getting first table. """
+        tables = camelot.read_pdf(self.link, pages=str(page_num+1))
+        return tables[0].df
+
+class NewJerseyGaming(NewJersey, IGamingTable):
+    def clean(self):
+        """ Open PDF, read titles, and relevant first table values. """
+        self.read_pdf()
+        num_pages = self.get_pages()
+        # Gather data from each page.
+        out = []
+        # Avoid parsing title if possible.
+        full_list = ["Bally's Atlantic City", 'Borgata Hotel Casino & Spa', 
+                     'Caesars Interactive Entertainment', 'Golden Nugget', 'Hard Rock Atlantic City', 
+                     'Ocean Casino Resort', 'Resorts Digital Gaming, LLC', 'Tropicana Casino & Resort']
+        extra_list = full_list.copy()
+        extra_list.insert(4, 'Golden Nugget')
+        casinos = {7: full_list[1:].copy(), 8: full_list.copy(), 9: extra_list}
+        tables = self.get_tables()
+        assert len(tables) == num_pages * 2, "Parser didn't get correct number of tables."
+        for i, casino in zip(range(num_pages), casinos[num_pages]):
+            table = tables[i*2].df.replace(r'[$ \n]', '', regex=True)
+            row = table.iloc[1:,-1].str.rstrip('-')
+            out.append({'State': self.state,
+                        'Category': self.category,
+                        'Sub-Category': ['Online Poker', 'Online Casino', 'Total'],
+                        'Date': self.date,
+                        'Provider': casino,
+                        'Internet Gaming Win': [row[1], row[2], row[3]]})
+        self.close_pdf()
+        return pd.DataFrame(out).explode(['Sub-Category', 'Internet Gaming Win'])
+
+class NewJerseySports(NewJersey, OSBTable):
+    def clean(self):
+        """ Open PDF, read titles, and get relevant values from first and third tables. """
+        self.read_pdf()
+        num_pages = self.get_pages()
+        # Gather data from each page.
+        out = []
+        casinos = self.get_casinos()
+        tables = self.get_tables()
+        for i, casino in zip(range(num_pages), casinos):
+            monthly_retail = self.get_value_from_table(tables, i*2, (3, -1))
+            monthly_internet = self.get_value_from_table(tables, 1+i*2, (3, -1))
+            out.append({'State': self.state,
+                        'Category': self.category,
+                        'Sub-Category': ['Retail', 'Online'],
+                        'Date': self.date,
+                        'Provider': casino,
+                        'Gross Revenue': [monthly_retail, monthly_internet]})
+        self.close_pdf()
+        out_df = pd.DataFrame(out).explode(['Sub-Category', 'Gross Revenue'])
+        out_df['Gross Revenue'] = out_df['Gross Revenue'].str.rstrip('-')
+        return out_df
+
+    def get_value_from_table(self, tables, table_num, coords):
+        """ Open camelot table, extract value from coordinates. """
+        df = tables[table_num].df
+        return df.iat[coords]
+
 ### Scraping functions ###
+def scrape(data, cls, *args):
+    try:
+        print(f"Scraping {args}")
+        data.append(cls(*args).clean())
+    except BaseException as e:
+        print(e.args)
+        print("*Unable to scrape")
+    
 def scrape_arizona():
     print("Starting Arizona".center(50, '-'))
     dataframes = []
@@ -820,32 +965,25 @@ def scrape_michigan():
     save(df, 'Michigan (iGaming).xlsx', numeric_cols=['Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
     print("Ending Michigan".center(50, '+'))
 
-
-def save(df, filename, numeric_cols=None):
-    # Clean numeric data and remove blank rows.
-    if numeric_cols:
-        Table.to_numeric(df, numeric_cols)
-        df = df.replace(0, pd.NA).dropna(how='all', subset=numeric_cols)
-    # Look up old data, if exists.
-    try:
-        print('Attempting to find old data')
-        matches = list(Path('Finished States').glob(filename))
-        assert len(matches) <= 1, f"There should be one match for {filename} in current or sub-directories\nMatches: {matches}"
-        print(f'Combining with "{matches[0]}"')
-        old_df = pd.read_excel(matches[0])
-        combined_df = pd.concat([old_df, df]).drop_duplicates()
-        print(f'New Data {df.shape} Old Data {old_df.shape}')
-        print(f'Combined {combined_df.shape}')
-    except (IndexError, FileNotFoundError):
-        print('No old data found')
-        combined_df = df.copy()
-    # Sort if columns are present. Index is usually somewhat ordered from scraping.
-    combined_df = combined_df.reset_index(drop=True)
-    combined_df.index.name = 'Index'
-    sorting = [x for x in ['Date', 'Sub-Category'] if x in combined_df.columns]
-    sorting.append('Index')
-    combined_df = combined_df.sort_values(by=sorting, ascending=True)
-    combined_df.to_excel(filename, index=False)
+def scrape_newjersey():
+    print("Starting New Jersey".center(50, '-'))
+    base_url = "https://www.nj.gov/oag/ge/docs/Financials"
+    data = []
+    #for dt in get_dates(date(2021, 1, 1)):
+    #    month, year = dt.strftime('%B %Y').split()
+    #    link = f'{base_url}/IGRTaxReturns/{year}/{month}{year}.pdf'
+    #    scrape(data, NewJerseyGaming, link)
+    #df = pd.concat(data)
+    #save(df, 'New Jersey (iGaming).xlsx', numeric_cols=['Internet Gaming Win'])
+    
+    data = []
+    for dt in get_dates(date(2021, 1, 1)):
+        month, year = dt.strftime('%B %Y').split()
+        link = f'{base_url}/SWRTaxReturns/{year}/{month}{year}.pdf'
+        scrape(data, NewJerseySports, link)
+    df = pd.concat(data)
+    save(df, 'New Jersey (OSB).xlsx', numeric_cols=['Gross Revenue'])
+    print("Ending New Jersey".center(50, '+'))
 
 
 if __name__ == '__main__':
@@ -856,4 +994,5 @@ if __name__ == '__main__':
     #scrape_iowa()
     #scrape_kansas()
     #scrape_maryland()
-    scrape_michigan()
+    #scrape_michigan()
+    scrape_newjersey()
