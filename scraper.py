@@ -12,7 +12,7 @@ from PyPDF2 import PdfReader
 import pypdfium2 as pdfium
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, unquote
 from urllib.error import HTTPError
 from itertools import chain
 
@@ -74,7 +74,7 @@ def save(df, filename, numeric_cols=None):
     combined_df = combined_df.reset_index(drop=True)
     combined_df.index.name = 'Index'
     if 'Sub-Category' in combined_df.columns:
-        combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], ['Online Poker', 'Online Casino', 'Total'])
+        combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], ['Retail', 'Online', 'Online Poker', 'Online Casino', 'Total'])
     sorting = [x for x in ['Date', 'Provider', 'Sub-Category'] if x in combined_df.columns]
     sorting.append('Index')
     combined_df = combined_df.sort_values(by=sorting, ascending=True)
@@ -806,6 +806,38 @@ class NewJerseySports(NewJersey, OSBTable):
         """ Open camelot table, extract value from coordinates. """
         df = tables[table_num].df
         return df.iat[coords]
+    
+class NewYork(OSBTable):
+    state = 'New York'
+
+    def __init__(self, link):
+        self.link = link
+        self.provider = unquote(self.link.split('/')[-1].split('.')[0].split('%20')[-1])
+
+    def clean(self):
+        data = []
+        excel_file = pd.ExcelFile(self.link)
+        sheets = excel_file.sheet_names
+        for sheet in sheets:
+            sheet_df = pd.read_excel(excel_file, sheet_name=sheet)
+            sheet_df = sheet_df.loc[:, sheet_df.applymap(lambda x: 'Month' in str(x) or 'GGR' in str(x)).any()]
+            sheet_df['Provider'] = self.provider
+            data.append(sheet_df)
+        df = pd.concat(data, ignore_index=True)
+        df = df.rename(columns={'Unnamed: 0': 'Date', 'Unnamed: 3': 'GGR'})
+        # convert the date_col column to datetime format
+        df['Date'] = pd.to_datetime(df['Date'], format='mixed', errors='coerce')
+        # keep only rows with datetime values in the date_col column
+        df = df.dropna(subset=['Date', 'GGR'])
+        df = df.sort_values('Date', ascending=True)
+        df["GGR"] = df["GGR"].astype(int)
+        df = df[["Date", "Provider", "GGR"]].reset_index(drop=True)
+        df.insert(0, 'State', self.state)
+        df.insert(1, 'Category', self.category)
+        #providers_filt = ['BetMGM', 'FanDuel', 'Caesars', 'DraftKings']
+        #df['Provider'] = df['Provider'].apply(lambda x: x if x in providers_filt else 'Others')
+        return df
+
 
 ### Scraping functions ###
 def scrape(data, cls, *args):
@@ -985,6 +1017,17 @@ def scrape_newjersey():
     save(df, 'New Jersey (OSB).xlsx', numeric_cols=['Gross Revenue'])
     print("Ending New Jersey".center(50, '+'))
 
+def scrape_newyork():
+    print("Starting New York".center(50, '-'))
+    url = 'https://www.gaming.ny.gov/gaming/index.php?ID=4'
+    data = []
+    links = get_links(url, href_keys=['Monthly Mobile Sports Wagering Report', '.xlsx'])
+    for link in links:
+        scrape(data, NewYork, link)
+    df = pd.concat(data)
+    save(df, 'New York (OSB).xlsx', numeric_cols=['GGR'])
+    print("Ending New York".center(50, '+'))
+
 
 if __name__ == '__main__':
     #scrape_arizona()
@@ -995,4 +1038,5 @@ if __name__ == '__main__':
     #scrape_kansas()
     #scrape_maryland()
     #scrape_michigan()
-    scrape_newjersey()
+    #scrape_newjersey()
+    scrape_newyork()
