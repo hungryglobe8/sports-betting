@@ -1,22 +1,23 @@
-import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from datetime import date, datetime, timedelta
-from dateutil.rrule import rrule, MONTHLY
-from dateutil.relativedelta import relativedelta
-from time import sleep
-from pathlib import Path
-import camelot
 import re
-from PyPDF2 import PdfReader
+from datetime import date, datetime, timedelta
+from io import BytesIO
+from itertools import chain
+from pathlib import Path
+from time import sleep
+from urllib.error import HTTPError
+from urllib.parse import unquote, urljoin
+from zipfile import ZipFile
+
+import camelot
+import pandas as pd
 import pypdfium2 as pdfium
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, unquote
-from urllib.error import HTTPError
-from itertools import chain
-from io import BytesIO
-from zipfile import ZipFile
+from dateutil.relativedelta import relativedelta
+from dateutil.rrule import MONTHLY, rrule
+from PyPDF2 import PdfReader
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 
 
 def get_dates(start, end=None):
@@ -46,7 +47,7 @@ def extract_date(text, regex, datefmt):
     """ Extract a date from a text through regex and datefmt. """
     return datetime.strptime(re.search(regex, text)[0], datefmt)
 
-def save(df, filename, numeric_cols=None):
+def save(data, filename, numeric_cols=None, folder='Finished States'):
     """ 
     Save a dataframe to a file.
     
@@ -54,23 +55,26 @@ def save(df, filename, numeric_cols=None):
     
     Checks for existing file with filename to keep old data intact.
     """
+    df = pd.concat(data)
     # Clean numeric data and remove blank rows.
     if numeric_cols:
         Table.to_numeric(df, numeric_cols)
-        df = df.replace(0, pd.NA).dropna(how='all', subset=numeric_cols)
+        df = df.replace(0, pd.NA)
+        df = df.dropna(how='all', subset=numeric_cols)
     # Look up old data, if exists.
+    Path(folder).mkdir(exist_ok=True)
     try:
         print('Attempting to find old data')
-        matches = list(Path('Finished States').glob(filename))
+        matches = list(Path(folder).glob(filename))
         assert len(matches) <= 1, f"There should be one match for {filename} in current or sub-directories\nMatches: {matches}"
         print(f'Combining with "{matches[0]}"')
-        old_df = pd.read_excel(matches[0])
+        old_df = pd.read_excel(matches[0]).replace(0, pd.NA)
         combined_df = pd.concat([old_df, df]).drop_duplicates()
         print(f'New Data {df.shape} Old Data {old_df.shape}')
         print(f'Combined {combined_df.shape}')
     except (IndexError, FileNotFoundError):
         print('No old data found')
-        combined_df = df.copy()
+        combined_df = df.copy().replace(0, pd.NA)
     # Sort if columns are present. Index is usually somewhat ordered from scraping.
     combined_df = combined_df.reset_index(drop=True)
     combined_df.index.name = 'Index'
@@ -80,7 +84,7 @@ def save(df, filename, numeric_cols=None):
     sorting = [x for x in ['Date', 'Provider', 'Sub-Category'] if x in combined_df.columns]
     sorting.append('Index')
     combined_df = combined_df.sort_values(by=sorting, ascending=True)
-    combined_df.to_excel(filename, index=False)
+    combined_df.to_excel(Path(folder) / filename, index=False)
 
 
 class Table:
@@ -184,6 +188,7 @@ class IGamingTable(Table):
 ### State Classes ###
 class Arizona(OSBTable):
     state = 'Arizona'
+    numeric_cols = ['Gross Wagering Receipts', 'Amount Won', 'Adjusted Gross Wagering Receipts', 'Promotional Credits']
     url = "https://gaming.az.gov/resources/reports#event-wagering-report-archive"
 
     def __init__(self, url):
@@ -225,7 +230,7 @@ class Arizona(OSBTable):
                 'Promotional Credits': values[7]
             })
         path.unlink()
-        return pd.DataFrame(data).replace(0, pd.NA).dropna(thresh=6)
+        return pd.DataFrame(data)
     
     @staticmethod
     def find_timestamp(url):
@@ -269,20 +274,13 @@ class Arizona(OSBTable):
                     continue
         return numerical
 
-    @staticmethod
-    def save(df):
-        df = OSBTable.combine_old(Arizona, df)
-        df['Sub-Category'] = Table.categorize(df['Sub-Category'], ['Retail', 'Online', 'Total'])
-        df = df.sort_values(by=['Date', 'Provider', 'Sub-Category'], ascending=True)
-        OSBTable.save(Arizona, df)
-
 class ConnecticutGaming(IGamingTable):
     state = 'Connecticut'
     url = "https://data.ct.gov/api/views/imqd-at3c/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
     numeric_cols = ['Wagers', 'Amount Won', 'Gross Gaming Revenue', 'Promotional Credits', 'Adjusted Revenue']
 
-    def __init__(self):
-        self.df = pd.read_csv(self.url)
+    def __init__(self, url):
+        self.df = pd.read_csv(url)
 
     def clean(self):
         out_df = pd.DataFrame({
@@ -297,17 +295,12 @@ class ConnecticutGaming(IGamingTable):
             'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
         })        
         out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
-        Table.to_numeric(out_df, self.numeric_cols)
         return out_df
-    
-    @staticmethod
-    def save(df):
-        df = IGamingTable.combine_old(ConnecticutGaming, df)
-        df = df.sort_values(by=['Date', 'Provider'], ascending=True)
-        IGamingTable.save(ConnecticutGaming, df)
 
 class ConnecticutSports(OSBTable):
     state = 'Connecticut'
+    retail_url = "https://data.ct.gov/api/views/yb54-t38r/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
+    online_url = "https://data.ct.gov/api/views/xf6g-659c/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
     numeric_cols = ['Wagers', 'Amount Won', 'Online Sports Wagering', 'Gross Gaming Revenue', 'Promotional Credits', 'Adjusted Revenue']
 
     def __init__(self, url, sub_category):
@@ -330,14 +323,7 @@ class ConnecticutSports(OSBTable):
             'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
         })
         out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
-        Table.to_numeric(out_df, self.numeric_cols)
         return out_df
-    
-    @staticmethod
-    def save(df):
-        df = OSBTable.combine_old(ConnecticutSports, df)
-        df = df.sort_values(by=['Date', 'Provider'], ascending=True)
-        OSBTable.save(ConnecticutSports, df)
 
 class Illinois(OSBTable):
     state = 'Illinois'
@@ -1105,6 +1091,12 @@ class WestVirginiaSports(WestVirgina, OSBTable):
         return pd.concat(dataframes)[['State', 'Category', 'Sub-Category', 'Date', 'Provider', 'Gross Tickets Written', 'Voids', 'Tickets Cashed', 'Total Taxable Receipts']]
 
 ### Scraping functions ###
+def print_start(state):
+    print(f"Starting {state}".center(50, '-'))
+
+def print_end(state):
+    print(f"Ending {state}".center(50, '+'))
+    
 def scrape(data, cls, *args):
     try:
         print(f"Scraping {args}")
@@ -1112,10 +1104,12 @@ def scrape(data, cls, *args):
     except BaseException as e:
         print(e.args)
         print("*Unable to scrape")
+    finally:
+        Path('temp.pdf').unlink(missing_ok=True)
     
 def scrape_arizona():
-    print("Starting Arizona".center(50, '-'))
-    dataframes = []
+    print_start("Arizona")
+    data = []
     # Arizona urls are hard-coded. Cannot be parsed automatically.
     links = [
         "https://gaming.az.gov/sites/default/files/EW%20Website%20Report%20-%20Sept%202021.pdf",
@@ -1135,32 +1129,30 @@ def scrape_arizona():
         "https://gaming.az.gov/sites/default/files/EW%20Revenue%20Report%20for%20Website%20-%20Nov%202022.pdf",
         "https://gaming.az.gov/sites/default/files/EW%20Revenue%20Report%20for%20Website%20-%20Dec%202022.pdf",
         "https://gaming.az.gov/sites/default/files/EW%20Revenue%20Report%20for%20Website%20-%20Jan%202023.pdf",
-        "https://gaming.az.gov/sites/default/files/EW%20Website%20Revenue%20Report-Feb%202023.pdf",
-        # Attempt March in two formats.
-        "https://gaming.az.gov/sites/default/files/EW%20Revenue%20Report%20for%20Website%20-%20Mar%202023.pdf",
-        "https://gaming.az.gov/sites/default/files/EW%20Website%20Revenue%20Report-Mar%202023.pdf"]
+        "https://gaming.az.gov/sites/default/files/EW%20Website%20Revenue%20Report-Feb%202023.pdf"
+    ]
     for link in links:
-        print(f"Scraping {link}")
-        try:
-            dataframes.append(Arizona(link).clean())
-        except:
-            Path('temp.pdf').unlink()
-            print(f"**Unable to scrape {link}")
-    df = pd.concat(dataframes)
-    Arizona.save(df)
-    print("Finished Arizona".center(50, '-'))
+        scrape(data, Arizona, link)
+    # Attempt future urls.
+    for dt in get_dates(date(2023, 3, 1)):
+        month, year = dt.strftime("%b %Y").split()
+        # Attempt future dates in two formats.
+        for link in [f"https://gaming.az.gov/sites/default/files/EW%20Revenue%20Report%20for%20Website%20-%20{month}%20{year}.pdf",
+                     f"https://gaming.az.gov/sites/default/files/EW%20Website%20Revenue%20Report-{month}%20{year}.pdf"]:
+            scrape(data, Arizona, link)
+    save(data, 'Arizona (OSB).xlsx', numeric_cols=Arizona.numeric_cols)
+    print_end("Arizona")
 
 def scrape_connecticut():
-    print("Starting Connecticut".center(50, '-'))
-    print("Scraping Connecticut iGaming")
-    ConnecticutGaming.save(ConnecticutGaming().clean())
-    print("Scraping Connecticut OSB")
-    retail_sports_url = "https://data.ct.gov/api/views/yb54-t38r/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
-    retail_df = ConnecticutSports(retail_sports_url, 'Retail').clean()
-    online_sports_url = "https://data.ct.gov/api/views/xf6g-659c/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
-    online_df = ConnecticutSports(online_sports_url, 'Online').clean()
-    ConnecticutSports.save(pd.concat([retail_df, online_df]))
-    print("Finished Connecticut".center(50, '-'))
+    print_start("Connecticut")
+    data = []
+    scrape(data, ConnecticutGaming, ConnecticutGaming.url)
+    save(data, 'Connecticut (iGaming).xlsx', numeric_cols=ConnecticutGaming.numeric_cols)
+    data = []
+    scrape(data, ConnecticutSports, ConnecticutSports.retail_url, 'Retail')
+    scrape(data, ConnecticutSports, ConnecticutSports.online_url, 'Online')
+    save(data, 'Connecticut (OSB).xlsx', numeric_cols=ConnecticutSports.numeric_cols)
+    print_end("Connecticut")
     
 def scrape_illinois():
     print("Starting Illinois".center(50, '-'))
@@ -1350,15 +1342,15 @@ def scrape_westvirginia():
     print("Ending West Virgina".center(50, '+'))
 
 if __name__ == '__main__':
-    scrape_arizona()
+    #scrape_arizona()
     scrape_connecticut()
-    scrape_illinois()
-    scrape_indiana()
-    scrape_iowa()
-    scrape_kansas()
-    scrape_maryland()
-    scrape_michigan()
+    #scrape_illinois()
+    #scrape_indiana()
+    #scrape_iowa()
+    #scrape_kansas()
+    #scrape_maryland()
+    #scrape_michigan()
     #scrape_newjersey()
-    scrape_newyork()
-    scrape_pennsylvania()
-    scrape_westvirginia()
+    #scrape_newyork()
+    #scrape_pennsylvania()
+    #scrape_westvirginia()
