@@ -81,7 +81,10 @@ def save(data, filename, numeric_cols=None, folder='Finished States'):
     if 'Sub-Category' in combined_df.columns:
         sorting = ['Retail', 'Online', 'Online Poker', 'Online Casino', 'Total', 'Interactive Slots', 'Banking Tables', 'Non-Banking Tables (Poker)']
         combined_df['Sub-Category'] = Table.categorize(combined_df['Sub-Category'], sorting)
-    sorting = [x for x in ['Date', 'Provider', 'Sub-Category'] if x in combined_df.columns]
+    if 'Sport Level' in combined_df.columns:
+        sorting = ['Professional', 'College', 'Motor Race', 'Other Event']
+        combined_df['Sport Level'] = Table.categorize(combined_df['Sport Level'], sorting)
+    sorting = [x for x in ['Date', 'Provider', 'Sport Level', 'Sub-Category'] if x in combined_df.columns]
     sorting.append('Index')
     combined_df = combined_df.sort_values(by=sorting, ascending=True)
     combined_df.to_excel(Path(folder) / filename, index=False)
@@ -139,51 +142,9 @@ class Table:
 
 class OSBTable(Table):
     category = 'Online Sports Betting (OSB)'
-    
-    @staticmethod
-    def combine_old(cls, df):
-        try:
-            file = f'{cls.state} (OSB).xlsx'
-            print('Attempting to find old data')
-            matches = list(Path('Finished States').glob(file))
-            assert len(matches) <= 1, f"There should be one match for {file} in current or sub-directories\nMatches: {matches}"
-            print(f'Combining with "{matches[0]}"')
-            old_df = pd.read_excel(matches[0])
-            combined_df = pd.concat([old_df, df]).drop_duplicates()
-            print(f'New Data {df.shape} Old Data {old_df.shape}')
-            print(f'Combined {combined_df.shape}')
-            return combined_df
-        except (IndexError, FileNotFoundError):
-            print('No old data found')
-            return df.copy()
-        
-    @staticmethod
-    def save(cls, df):
-        df.to_excel(f'{cls.state} (OSB).xlsx', index=False)
 
 class IGamingTable(Table):
     category = 'iGaming'
-
-    @staticmethod
-    def combine_old(cls, df):
-        try:
-            file = f'{cls.state} (iGaming).xlsx'
-            print('Attempting to find old data')
-            matches = list(Path('Finished States').glob(file))
-            assert len(matches) <= 1, f"There should be one match for {file} in current or sub-directories\nMatches: {matches}"
-            print(f'Combining with "{matches[0]}"')
-            old_df = pd.read_excel(matches[0])
-            combined_df = pd.concat([old_df, df]).drop_duplicates()
-            print(f'New Data {df.shape} Old Data {old_df.shape}')
-            print(f'Combined {combined_df.shape}')
-            return combined_df
-        except (IndexError, FileNotFoundError):
-            print('No old data found')
-            return df.copy() 
-        
-    @staticmethod
-    def save(cls, df):
-        df.to_excel(f'{cls.state} (iGaming).xlsx', index=False)
 
 ### State Classes ###
 class Arizona(OSBTable):
@@ -328,6 +289,7 @@ class ConnecticutSports(OSBTable):
 class Illinois(OSBTable):
     state = 'Illinois'
     url = "https://www.igb.illinois.gov/SportsReports.aspx"
+    numeric_cols = ['Tier 1 Wagers', 'Tier 1 Handle', 'Tier 2 Wagers', 'Tier 2 Handle']
 
     def __init__(self, dt, driver):
         self.date = dt
@@ -361,7 +323,7 @@ class Illinois(OSBTable):
             'Sport Level': self.df['Sport Level'],
             **self.df[['Tier 1 Wagers', 'Tier 1 Handle', 'Tier 2 Wagers', 'Tier 2 Handle']]
         })
-        return out_df.replace(0, pd.NA).dropna(thresh=7)
+        return out_df
 
     @staticmethod
     def selenium():
@@ -375,14 +337,6 @@ class Illinois(OSBTable):
         driver.get(Illinois.url)
         sleep(2)
         return driver
-    
-    @staticmethod
-    def save(df):
-        df = OSBTable.combine_old(Illinois, df)
-        df['Sport Level'] = Table.categorize(df['Sport Level'], ['Professional', 'College', 'Motor Race'])
-        df['Sub-Category'] = Table.categorize(df['Sub-Category'], ['Retail', 'Online', 'Total'])
-        df = df.sort_values(by=['Date', 'Provider', 'Sport Level', 'Sub-Category'], ascending=True)
-        OSBTable.save(Illinois, df)
 
 class Indiana(Table):
     state = 'Indiana'
@@ -420,11 +374,8 @@ class Indiana(Table):
         out_df.insert(1, 'Category', 'iGaming')
         out_df.insert(2, 'Date', self.date)
         out_df.rename(columns={'TOTAL TAX': 'Provider'}, inplace=True)
-        numeric_cols = ['Supplemental Tax', 'Sports Wagering Tax', 'Wagering Tax', 'Total Tax',
-                'Win', 'Free Play', 'Other *', 'Taxable AGR', 'No. of Table Games',
-                'Table Win', 'No. of EGD/Slots', 'EGD/Slot Win', 'AGR']
-        Table.to_numeric(out_df, numeric_cols)
-        return out_df
+        return out_df[['State', 'Category', 'Date', 'Provider', 'Location', 
+                       'Win', 'Free Play', 'Other *', 'Taxable AGR', 'Table Win', 'EGD/Slot Win', 'AGR']]
 
     def original_sports_betting(self):
         """ Sports betting was not recorded before September 2019, in Indiana. """
@@ -466,19 +417,6 @@ class Indiana(Table):
                 out_df.append({'State': self.state, 'Category': 'Online Sports Betting (OSB)', 'Date': self.date, 
                                'Provider': provider, 'Sub-Provider': sub, 'Handle': handle, 'AGR': gross})
         return pd.DataFrame(out_df)
-      
-    @staticmethod
-    def save_games(df):
-        df = IGamingTable.combine_old(Indiana, df)
-        df = df.sort_values(by=['Date', 'Provider'], ascending=True)
-        IGamingTable.save(Indiana, df)
-
-    @staticmethod
-    def save_sports(df):
-        df = OSBTable.combine_old(Indiana, df)
-        df.index.name = 'Index'
-        df = df.sort_values(by=['Date', 'Index'], ascending=True)
-        OSBTable.save(Indiana, df)
 
 class Iowa(OSBTable):
     state = 'Iowa'
@@ -632,15 +570,7 @@ class Kansas(OSBTable):
         out_df.insert(1, 'Category', self.category)
         out_df.insert(3, 'Date', self.date)
         out_df.reset_index(drop=True, inplace=True)
-        Table.to_numeric(out_df, self.numeric_cols)
-        return out_df.replace(0, pd.NA).dropna(how='all', subset=self.numeric_cols)
-    
-    @staticmethod
-    def save(df):
-        df = OSBTable.combine_old(Kansas, df)
-        df.index.name = 'Index'
-        df = df.sort_values(by=['Date', 'Sub-Category', 'Index'], ascending=True)
-        OSBTable.save(Kansas, df)
+        return out_df
 
 class Maryland(OSBTable):
     state = 'Maryland'
@@ -688,11 +618,6 @@ class Maryland(OSBTable):
         combined['Category'] = self.category
         self.to_numeric(combined, self.numeric_cols)
         return combined[self.ordered].reset_index(drop=True)
-    
-    @staticmethod
-    def save(df):
-        df = OSBTable.combine_old(Maryland, df)
-        OSBTable.save(Maryland, df)
 
 class Michigan:
     state = 'Michigan'
@@ -1155,21 +1080,16 @@ def scrape_connecticut():
     print_end("Connecticut")
     
 def scrape_illinois():
-    print("Starting Illinois".center(50, '-'))
+    print_start("Illinois")
     driver = Illinois.selenium()
-    dataframes = []
+    data = []
     for dt in get_dates(date(2021, 1, 1)):
-        try:
-            print(f"Scraping {dt}")
-            dataframes.append(Illinois(dt, driver).clean())
-        except:
-            print(f"**Unable to scrape {dt}")
-    df = pd.concat(dataframes)
-    Illinois.save(df)
-    print("Finished Illinois".center(50, '-'))
+        scrape(data, Illinois, dt, driver)
+    save(data, 'Illinois (OSB).xlsx', Illinois.numeric_cols)
+    print_end("Illinois")
 
 def scrape_indiana():
-    print("Starting Indiana".center(50, '-'))
+    print_start("Indiana")
     games_data, sports_data = [], []
     for dt in get_dates(date(2019, 9, 1)):
         try:
@@ -1178,13 +1098,13 @@ def scrape_indiana():
             games_data.append(x.clean_gaming())
             sports_data.append(x.clean_sports_betting())
         except:
-            print(f"**Unable to scrape {dt}")
-    Indiana.save_games(pd.concat(games_data))
-    Indiana.save_sports(pd.concat(sports_data))
-    print("Finished Indiana".center(50, '-'))
+            print(f"*Unable to scrape {dt}")
+    save(games_data, 'Indiana (iGaming).xlsx', numeric_cols=['Win', 'Free Play', 'Other *', 'Taxable AGR', 'Table Win', 'EGD/Slot Win', 'AGR'])
+    save(sports_data, 'Indiana (OSB).xlsx', numeric_cols=['Handle', 'AGR'])
+    print_end("Indiana")
 
 def scrape_iowa():
-    print("Starting Iowa".center(50, '-'))
+    print_start("Iowa")
     url = 'https://irgc.iowa.gov/publications-reports/sports-wagering-revenue'
     data = []
     historical = Iowa.get_links(f'{url}/archived-sports-revenue', 'media')
@@ -1198,132 +1118,103 @@ def scrape_iowa():
         except BaseException as e:
             print(e.args)
             print("*Unable to scrape")
-    df = pd.concat(data)
-    save(df, 'Iowa (OSB).xlsx', numeric_cols=Iowa.numeric_cols)
-    print("Ending Iowa".center(50, '+'))
+    save(data, 'Iowa (OSB).xlsx', numeric_cols=Iowa.numeric_cols)
+    print_end("Iowa")
 
 def scrape_kansas():
-    print("Starting Kansas".center(50, '-'))
-    dataframes = []
+    print_start("Kansas")
+    data = []
     url = 'https://kslottery.com/publications/sports-monthly-revenues/'
     links = get_links(url, href_keys=['media', 'revenue'])
     for link in links:
-        print(f"Scraping {link}")
-        try:
-            dataframes.append(Kansas(link).clean())
-        except:
-            print("**Unable to scrape")
-    df = pd.concat(dataframes)
-    Kansas.save(df)
-    print("Finishing Kansas".center(50, '-'))
+        scrape(data, Kansas, link)
+    save(data, 'Kansas (OSB).xlsx', Kansas.numeric_cols)
+    print_end("Kansas")
 
 def scrape_maryland():
-    print("Starting Maryland".center(50, '-'))
+    print_start("Maryland")
     data = []
     for dt in get_dates(date(2022, 5, 1)):
-        try:
-            upload_month = dt + relativedelta(months=1)
-            upload_str = upload_month.strftime('%Y/%m')
-            data_str = dt.strftime('%B-%Y')
-            link = f'https://www.mdgaming.com/wp-content/uploads/{upload_str}/{data_str}-Sports-Wagering-Data.xlsx'
-            print(f"Scraping {link}")
-            data.append(Maryland(link).clean())
-        except:
-            print("**Unable to scrape")
-    df = pd.concat(data)
-    Maryland.save(df)
-    print("Ending Maryland".center(50, '+'))
+        upload_month = dt + relativedelta(months=1)
+        upload_str = upload_month.strftime('%Y/%m')
+        data_str = dt.strftime('%B-%Y')
+        link = f'https://www.mdgaming.com/wp-content/uploads/{upload_str}/{data_str}-Sports-Wagering-Data.xlsx'
+        scrape(data, Maryland, link)
+    save(data, 'Maryland (OSB).xlsx', Maryland.numeric_cols)
+    print_end("Maryland")
 
 def scrape_michigan():
-    print("Starting Michigan".center(50, '-'))
+    print_start("Michigan")
     data = []
     url = 'https://www.michigan.gov/mgcb/detroit-casinos/resources/revenues-and-wagering-tax-information'
     retail_osb = get_links(url, text_keys=['Retail Sports Betting', 'PDF'])
     online_osb = get_links(url, text_keys=['Internet Sports Betting'])
     for link in retail_osb:
-        try:
-            print(f"Scraping {link}")
-            data.append(MichiganRetailSports(link).clean())
-        except:
-            print("**Unable to scrape")
+        scrape(data, MichiganRetailSports, link)
     for link in online_osb:
-        try:
-            print(f"Scraping {link}")
-            data.append(MichiganOnlineSports(link).clean())
-        except:
-            print("**Unable to scrape")
+        scrape(data, MichiganOnlineSports, link)
     df = pd.concat(data)
     df = df[['State', 'Category', 'Sub-Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
              'Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
-    save(df, 'Michigan (OSB).xlsx', numeric_cols=['Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
+    save([df], 'Michigan (OSB).xlsx', numeric_cols=['Total Handle', 'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
 
     data = []
     internet_games = get_links(url, text_keys=['Internet Gaming', 'Excel'])
     for link, sheet in zip(internet_games, ['Internet Gaming 2023', 'Internet Gaming 2022', 'Internet Gaming 2021']):
-        try:
-            print(f"Scraping {link}, {sheet}")
-            data.append(MichiganGaming(link, sheet).clean())
-        except:
-            print("**Unable to scrape")
+        scrape(data, MichiganGaming, link, sheet)
     df = pd.concat(data)
     df = df[['State', 'Category', 'Date', 'Operators', 'Provider', 'Sub-Provider', 
              'Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax']]
-    save(df, 'Michigan (iGaming).xlsx', numeric_cols=['Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
-    print("Ending Michigan".center(50, '+'))
+    save([df], 'Michigan (iGaming).xlsx', numeric_cols=['Total Gross Receipts', 'Adjusted Gross Receipts', 'State Tax'])
+    print_end("Michigan")
 
 def scrape_newjersey():
-    print("Starting New Jersey".center(50, '-'))
+    print_start("New Jersey")
     base_url = "https://www.nj.gov/oag/ge/docs/Financials"
     data = []
     for dt in get_dates(date(2021, 1, 1)):
         month, year = dt.strftime('%B %Y').split()
         link = f'{base_url}/IGRTaxReturns/{year}/{month}{year}.pdf'
         scrape(data, NewJerseyGaming, link)
-    df = pd.concat(data)
-    save(df, 'New Jersey (iGaming).xlsx', numeric_cols=['Internet Gaming Win'])
+    save(data, 'New Jersey (iGaming).xlsx', numeric_cols=['Internet Gaming Win'])
     
     data = []
     for dt in get_dates(date(2021, 1, 1)):
         month, year = dt.strftime('%B %Y').split()
         link = f'{base_url}/SWRTaxReturns/{year}/{month}{year}.pdf'
         scrape(data, NewJerseySports, link)
-    df = pd.concat(data)
-    save(df, 'New Jersey (OSB).xlsx', numeric_cols=['Gross Revenue'])
-    print("Ending New Jersey".center(50, '+'))
+    save(data, 'New Jersey (OSB).xlsx', numeric_cols=['Gross Revenue'])
+    print_end("New Jersey")
 
 def scrape_newyork():
-    print("Starting New York".center(50, '-'))
+    print_start("New York")
     url = 'https://www.gaming.ny.gov/gaming/index.php?ID=4'
     data = []
     links = get_links(url, href_keys=['Monthly Mobile Sports Wagering Report', '.xlsx'])
     for link in links:
         scrape(data, NewYork, link)
-    df = pd.concat(data)
-    save(df, 'New York (OSB).xlsx', numeric_cols=['GGR'])
-    print("Ending New York".center(50, '+'))
+    save(data, 'New York (OSB).xlsx', numeric_cols=['GGR'])
+    print_end("New York")
 
 def scrape_pennsylvania():
-    print("Starting Pennsylvania".center(50, '-'))
+    print_start("Pennsylvania")
     base_url = "https://gamingcontrolboard.pa.gov/files/revenue"
     data = []
     for i in range(2019, 2023):
         link = f'{base_url}/Gaming_Revenue_Monthly_Interactive_Gaming_FY{i}{i+1}.xlsx'
         scrape(data, PennsylvaniaGaming, link)
-    df = pd.concat(data)
-    save(df, 'Pennsylvania (iGaming).xlsx', numeric_cols=PennsylvaniaGaming.numeric_cols)
+    save(data, 'Pennsylvania (iGaming).xlsx', numeric_cols=PennsylvaniaGaming.numeric_cols)
 
     data = []
     for i in range(2019, 2023):
         link = f'{base_url}/Gaming_Revenue_Monthly_Sports_Wagering_FY{i}{i+1}.xlsx'
         scrape(data, PennsylvaniaSports, link)   
-    df = pd.concat(data)
     #df.sort_values(by=['Date', 'Index', 'Sub-Category'])
-    save(df, 'Pennsylvania (OSB).xlsx', numeric_cols=PennsylvaniaSports.numeric_cols) 
-    
-    print("Ending Pennsylvania".center(50, '+'))
+    save(data, 'Pennsylvania (OSB).xlsx', numeric_cols=PennsylvaniaSports.numeric_cols) 
+    print_end("Pennsylvania")
 
 def scrape_westvirginia():
-    print("Starting West Virgina".center(50, '-'))
+    print_start("West Virginia")
     url = 'https://wvlottery.com/requests/2020-06-15-1110/?report=new'
     sports_zip = get_links(url, text_keys='Sports Wagering')[0]
     igaming_zip = get_links(url, text_keys='iGaming')[0]
@@ -1334,18 +1225,18 @@ def scrape_westvirginia():
 
     print(f"Scraping {sports_zip}")
     df = WestVirginiaSports(szip).clean()
-    save(df, 'West Virginia (OSB).xlsx', numeric_cols=WestVirginiaSports.numeric_cols)
+    save([df], 'West Virginia (OSB).xlsx', numeric_cols=WestVirginiaSports.numeric_cols)
 
     print(f"Scraping {igaming_zip}")
     df = WestVirginiaGaming(izip).clean()
-    save(df, 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
-    print("Ending West Virgina".center(50, '+'))
+    save([df], 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
+    print_end("West Virgina")
 
 if __name__ == '__main__':
     #scrape_arizona()
-    scrape_connecticut()
+    #scrape_connecticut()
     #scrape_illinois()
-    #scrape_indiana()
+    scrape_indiana()
     #scrape_iowa()
     #scrape_kansas()
     #scrape_maryland()
