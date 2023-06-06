@@ -4,7 +4,6 @@ version = "0.1.0"
 description = ""
 authors = ["Casey Rand"]
 readme = "README.md"
-packages = [{include = "sports_betting"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"

@@ -381,6 +381,7 @@ class Illinois(OSBTable):
     def selenium():
         """ Opens up selenium driver at Illinois url. Downloads to this directory. """
         options = webdriver.ChromeOptions()
+        options.add_argument('--headless')
         prefs = {'download.default_directory' : str(Path().absolute())}
         options.add_experimental_option('prefs', prefs)
         driver = webdriver.Chrome(options=options)
@@ -867,16 +868,17 @@ class NewJerseyGaming(NewJersey, IGamingTable):
         num_pages = self.get_pages()
         # Gather data from each page.
         out = []
-        # Avoid parsing title if possible.
-        full_list = ["Bally's Atlantic City", 'Borgata Hotel Casino & Spa', 
-                     'Caesars Interactive Entertainment', 'Golden Nugget', 'Hard Rock Atlantic City', 
-                     'Ocean Casino Resort', 'Resorts Digital Gaming, LLC', 'Tropicana Casino & Resort']
-        extra_list = full_list.copy()
-        extra_list.insert(4, 'Golden Nugget')
-        casinos = {7: full_list[1:].copy(), 8: full_list.copy(), 9: extra_list}
+        ## Avoid parsing title if possible.
+        #full_list = ["Bally's Atlantic City", 'Borgata Hotel Casino & Spa', 
+        #             'Caesars Interactive Entertainment', 'Golden Nugget', 'Hard Rock Atlantic City', 
+        #             'Ocean Casino Resort', 'Resorts Digital Gaming, LLC', 'Tropicana Casino & Resort']
+        #extra_list = full_list.copy()
+        #extra_list.insert(4, 'Golden Nugget')
+        #casinos = {7: full_list[1:].copy(), 8: full_list.copy(), 9: extra_list}[num_pages]
+        casinos = self.get_casinos()
         tables = self.get_tables()
         assert len(tables) == num_pages * 2, "Parser didn't get correct number of tables."
-        for i, casino in zip(range(num_pages), casinos[num_pages]):
+        for i, casino in zip(range(num_pages), casinos):
             table = tables[i*2].df.replace(r'[$ \n]', '', regex=True)
             row = table.iloc[1:,-1].str.rstrip('-')
             out.append({'State': self.state,
@@ -898,7 +900,6 @@ class NewJerseySports(NewJersey, OSBTable):
         casinos = self.get_casinos()
         tables = self.get_tables()
         tables_per_page = len(tables) // len(casinos)
-        print(tables_per_page)
         for i, casino in zip(range(num_pages), casinos):
             table_idx = tables_per_page * i
             monthly_retail = self.get_value_from_table(tables, table_idx, (3, -1))
@@ -1165,7 +1166,7 @@ def scrape_illinois():
     print("Starting Illinois".center(50, '-'))
     driver = Illinois.selenium()
     dataframes = []
-    for dt in get_dates(date(2023, 1, 1)):
+    for dt in get_dates(date(2021, 1, 1)):
         try:
             print(f"Scraping {dt}")
             dataframes.append(Illinois(dt, driver).clean())
@@ -1349,15 +1350,15 @@ def scrape_westvirginia():
     print("Ending West Virgina".center(50, '+'))
 
 if __name__ == '__main__':
-    #scrape_arizona()
-    #scrape_connecticut()
-    #scrape_illinois()
-    #scrape_indiana()
-    #scrape_iowa()
-    #scrape_kansas()
-    #scrape_maryland()
-    #scrape_michigan()
-    scrape_newjersey()
-    #scrape_newyork()
-    #scrape_pennsylvania()
-    #scrape_westvirginia()
+    scrape_arizona()
+    scrape_connecticut()
+    scrape_illinois()
+    scrape_indiana()
+    scrape_iowa()
+    scrape_kansas()
+    scrape_maryland()
+    scrape_michigan()
+    #scrape_newjersey()
+    scrape_newyork()
+    scrape_pennsylvania()
+    scrape_westvirginia()
