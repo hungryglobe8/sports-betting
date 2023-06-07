@@ -18,7 +18,9 @@ from dateutil.relativedelta import relativedelta
 from dateutil.rrule import MONTHLY, rrule
 from PyPDF2 import PdfReader
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -338,11 +340,12 @@ class Illinois(OSBTable):
     @staticmethod
     def selenium():
         """ Opens up selenium driver at Illinois url. Downloads to this directory. """
+        service = ChromeService(ChromeDriverManager().install())
         options = webdriver.ChromeOptions()
         options.add_argument('--headless')
         prefs = {'download.default_directory' : str(Path().absolute())}
         options.add_experimental_option('prefs', prefs)
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(service=service, options=options)
         
         driver.get(Illinois.url)
         sleep(2)
