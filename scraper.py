@@ -1,7 +1,6 @@
 import re
 from datetime import date, datetime, timedelta
-from io import BytesIO
-from itertools import chain
+from io import BytesIO, StringIO
 from pathlib import Path
 from time import sleep
 from urllib.error import HTTPError
@@ -9,6 +8,7 @@ from urllib.parse import unquote, urljoin
 from zipfile import ZipFile
 
 import camelot
+import numpy as np
 import pandas as pd
 import pypdfium2 as pdfium
 import requests
@@ -59,7 +59,7 @@ def save(data, filename, numeric_cols=None, folder='Finished States'):
     # Clean numeric data and remove blank rows.
     if numeric_cols:
         Table.to_numeric(df, numeric_cols)
-        df = df.replace(0, pd.NA)
+        df = df.replace(0, np.NaN)
         df = df.dropna(how='all', subset=numeric_cols)
     # Look up old data, if exists.
     Path(folder).mkdir(exist_ok=True)
@@ -68,13 +68,13 @@ def save(data, filename, numeric_cols=None, folder='Finished States'):
         matches = list(Path(folder).glob(filename))
         assert len(matches) <= 1, f"There should be one match for {filename} in current or sub-directories\nMatches: {matches}"
         print(f'Combining with "{matches[0]}"')
-        old_df = pd.read_excel(matches[0]).replace(0, pd.NA)
+        old_df = pd.read_excel(matches[0]).replace(0, np.NaN)
         combined_df = pd.concat([old_df, df]).drop_duplicates()
         print(f'New Data {df.shape} Old Data {old_df.shape}')
         print(f'Combined {combined_df.shape}')
     except (IndexError, FileNotFoundError):
         print('No old data found')
-        combined_df = df.copy().replace(0, pd.NA)
+        combined_df = df.copy().replace(0, np.NaN)
     # Sort if columns are present. Index is usually somewhat ordered from scraping.
     combined_df = combined_df.reset_index(drop=True)
     combined_df.index.name = 'Index'
@@ -89,6 +89,13 @@ def save(data, filename, numeric_cols=None, folder='Finished States'):
     combined_df = combined_df.sort_values(by=sorting, ascending=True)
     combined_df.to_excel(Path(folder) / filename, index=False)
 
+def read_url_to_df(url):
+    """ Read urls to pd.DataFrame (works better with pandas>2). """
+    if not pd.__version__.startswith('2'):
+        url_data = requests.get(url).content
+        return pd.read_csv(StringIO(url_data.decode('utf-8')))
+    else:
+        return pd.read_csv(url)
 
 class Table:
     @staticmethod
@@ -241,7 +248,7 @@ class ConnecticutGaming(IGamingTable):
     numeric_cols = ['Wagers', 'Amount Won', 'Gross Gaming Revenue', 'Promotional Credits', 'Adjusted Revenue']
 
     def __init__(self, url):
-        self.df = pd.read_csv(url)
+        self.df = read_url_to_df(url)
 
     def clean(self):
         out_df = pd.DataFrame({
@@ -266,7 +273,7 @@ class ConnecticutSports(OSBTable):
 
     def __init__(self, url, sub_category):
         self.url = url
-        self.df = pd.read_csv(self.url)
+        self.df = read_url_to_df(self.url)
         self.sub_category = sub_category
 
     def clean(self):
@@ -311,7 +318,7 @@ class Illinois(OSBTable):
         driver.find_element(By.CSS_SELECTOR, 'input[value="ViewCSV"]').click()
         # Only one button.
         driver.find_element(By.CLASS_NAME, 'button').click()
-        sleep(3)
+        sleep(4)
 
     def clean(self):
         out_df = pd.DataFrame({
@@ -440,7 +447,7 @@ class Iowa(OSBTable):
             split[i] = self.first_row_to_columns(x.T)
         # Combine.
         out_df = (pd.concat(split).
-                  replace(r'^\s*$', pd.NA, regex=True).
+                  replace(r'^\s*$', np.NaN, regex=True).
                   dropna(how='all'))
         out_df.rename(columns={out_df.columns[0]: "Provider"}, inplace=True)
         out_df.insert(0, 'State', self.state)
@@ -544,7 +551,7 @@ class Kansas(OSBTable):
         self.date = extract_date(link, r'\d{4}-\d{2}', '%Y-%m')
         # Assuming Page 1 is always current month.
         self.df = camelot.read_pdf(self.link, pages='1')[0].df
-        self.df = self.df.replace('', pd.NA).dropna(how='all')
+        self.df = self.df.replace('', np.NaN).dropna(how='all')
 
     def clean(self):
         df = self.df
@@ -648,7 +655,7 @@ class Michigan:
 class MichiganRetailSports(Michigan, OSBTable):
     def __init__(self, link):
         # PDFs are easier to parse than encrypted Excel.
-        self.df = self.first_row_to_columns(camelot.read_pdf(link)[0].df).replace('', pd.NA)
+        self.df = self.first_row_to_columns(camelot.read_pdf(link)[0].df).replace('', np.NaN)
         self.category = 'Online Sports Betting (OSB)'
         self.subcategory = 'Retail'
         
@@ -687,7 +694,7 @@ class MichiganOnlineSports(Michigan, OSBTable):
         self.header.columns = ['Operators', 'Provider', 'Sub-Provider']
         self.body = (self.first_row_to_columns(
             self.df.iloc[4:18].
-            replace(0, pd.NA).
+            replace(0, np.NaN).
             dropna(thresh=4)
         ))
         
@@ -718,12 +725,12 @@ class MichiganGaming(Michigan, IGamingTable):
         self.header.columns = ['Operators', 'Provider', 'Sub-Provider']
         self.body = (self.first_row_to_columns(
             self.df.iloc[4:18].
-            replace(0, pd.NA).
+            replace(0, np.NaN).
             dropna(thresh=4)
         ))
 
     def clean(self):
-        return super().clean(3).replace(0, pd.NA).dropna(how='all', axis=1)
+        return super().clean(3).replace(0, np.NaN).dropna(how='all', axis=1)
 
     def get_next(self, data, idx):
         return {
@@ -909,8 +916,8 @@ class PennsylvaniaGaming(Pennsylvania, IGamingTable):
                 'Sub-Category': ['Interactive Slots', 'Banking Tables', 'Non-Banking Tables (Poker)'],
                 'Date': month,
                 'Provider': self.providers[idx],
-                'Wagers Received': [islots_1, ibanking_1, pd.NA],
-                'Amount Won': [islots_2, pd.NA, pd.NA],
+                'Wagers Received': [islots_1, ibanking_1, np.NaN],
+                'Amount Won': [islots_2, np.NaN, np.NaN],
                 'Gross Revenue': [islots_3, ibanking_3, nbanking_3]}
 
 class PennsylvaniaSports(Pennsylvania, OSBTable):
@@ -939,7 +946,7 @@ class PennsylvaniaSports(Pennsylvania, OSBTable):
                 'Provider': self.providers[idx],
                 'Handle': [total_1, retail_1, online_1],
                 'Revenue': [total_2, retail_4, online_2],
-                'Promotional Credits': [total_3, pd.NA, online_3],
+                'Promotional Credits': [total_3, np.NaN, online_3],
                 'Gross Revenue': [total_4, retail_4, online_4]}
 
 class WestVirgina:
@@ -1231,17 +1238,35 @@ def scrape_westvirginia():
     df = WestVirginiaGaming(izip).clean()
     save([df], 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
     print_end("West Virgina")
+    print_start("West Virginia")
+    url = 'https://wvlottery.com/requests/2020-06-15-1110/?report=new'
+    sports_zip = get_links(url, text_keys='Sports Wagering')[0]
+    igaming_zip = get_links(url, text_keys='iGaming')[0]
+
+    HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36'}
+    szip = ZipFile(BytesIO(requests.get(sports_zip, headers=HEADERS).content))
+    izip = ZipFile(BytesIO(requests.get(igaming_zip, headers=HEADERS).content))
+
+    print(f"Scraping {sports_zip}")
+    df = WestVirginiaSports(szip).clean()
+    save([df], 'West Virginia (OSB).xlsx', numeric_cols=WestVirginiaSports.numeric_cols)
+
+    print(f"Scraping {igaming_zip}")
+    df = WestVirginiaGaming(izip).clean()
+    save([df], 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
+    print_end("West Virgina")
+
 
 if __name__ == '__main__':
-    #scrape_arizona()
-    #scrape_connecticut()
-    #scrape_illinois()
+    scrape_arizona()
+    scrape_connecticut()
+    scrape_illinois()
     scrape_indiana()
-    #scrape_iowa()
-    #scrape_kansas()
-    #scrape_maryland()
-    #scrape_michigan()
+    scrape_iowa()
+    scrape_kansas()
+    scrape_maryland()
+    scrape_michigan()
     #scrape_newjersey()
-    #scrape_newyork()
-    #scrape_pennsylvania()
-    #scrape_westvirginia()
+    scrape_newyork()
+    scrape_pennsylvania()
+    scrape_westvirginia()
