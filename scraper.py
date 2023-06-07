@@ -1033,14 +1033,14 @@ def print_end(state):
     print(f"Ending {state}".center(50, '+'))
     
 def scrape(data, cls, *args):
-    #try:
+    try:
         print(f"Scraping {args}")
         data.append(cls(*args).clean())
-    #except BaseException as e:
-    #    print(e.args)
-    #    print("*Unable to scrape")
-    #finally:
-    #    Path('temp.pdf').unlink(missing_ok=True)
+    except BaseException as e:
+        print(e.args)
+        print("*Unable to scrape")
+    finally:
+        Path('temp.pdf').unlink(missing_ok=True)
     
 def scrape_arizona():
     print_start("Arizona")
@@ -1241,35 +1241,18 @@ def scrape_westvirginia():
     df = WestVirginiaGaming(izip).clean()
     save([df], 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
     print_end("West Virgina")
-    print_start("West Virginia")
-    url = 'https://wvlottery.com/requests/2020-06-15-1110/?report=new'
-    sports_zip = get_links(url, text_keys='Sports Wagering')[0]
-    igaming_zip = get_links(url, text_keys='iGaming')[0]
-
-    HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36'}
-    szip = ZipFile(BytesIO(requests.get(sports_zip, headers=HEADERS).content))
-    izip = ZipFile(BytesIO(requests.get(igaming_zip, headers=HEADERS).content))
-
-    print(f"Scraping {sports_zip}")
-    df = WestVirginiaSports(szip).clean()
-    save([df], 'West Virginia (OSB).xlsx', numeric_cols=WestVirginiaSports.numeric_cols)
-
-    print(f"Scraping {igaming_zip}")
-    df = WestVirginiaGaming(izip).clean()
-    save([df], 'West Virginia (iGaming).xlsx', numeric_cols=WestVirginiaGaming.numeric_cols)
-    print_end("West Virgina")
 
 
 if __name__ == '__main__':
     #scrape_arizona()
     #scrape_connecticut()
     #scrape_illinois()
-    scrape_indiana()
-    scrape_iowa()
-    scrape_kansas()
-    scrape_maryland()
-    scrape_michigan()
+    #scrape_indiana()
+    ##scrape_iowa()
+    ##scrape_kansas()
+    #scrape_maryland()
+    ##scrape_michigan()
     #scrape_newjersey()
-    scrape_newyork()
-    scrape_pennsylvania()
-    scrape_westvirginia()
+    #scrape_newyork()
+    #scrape_pennsylvania()
+    ##scrape_westvirginia()
