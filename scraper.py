@@ -1,4 +1,5 @@
 import re
+import ssl
 from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -18,6 +19,8 @@ from dateutil.rrule import MONTHLY, rrule
 from PyPDF2 import PdfReader
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 
 def get_dates(start, end=None):
@@ -262,7 +265,7 @@ class ConnecticutGaming(IGamingTable):
             'Promotional Credits': self.df["Promotional Coupons or Credits Wagered (3)"],
             'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
         })        
-        out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
+        out_df["Date"] = pd.to_datetime(out_df["Date"]).values.astype("datetime64[M]")
         return out_df
 
 class ConnecticutSports(OSBTable):
@@ -290,7 +293,7 @@ class ConnecticutSports(OSBTable):
             'Promotional Credits': self.df["Promotional Coupons or Credits Wagered (5)"],
             'Adjusted Revenue': self.df["Total Gross Gaming Revenue"]
         })
-        out_df["Date"] = pd.to_datetime(out_df["Date"], format='mixed').values.astype("datetime64[M]")
+        out_df["Date"] = pd.to_datetime(out_df["Date"]).values.astype("datetime64[M]")
         return out_df
 
 class Illinois(OSBTable):
@@ -360,7 +363,7 @@ class Indiana(Table):
         """ HTML/PDF before July 2019. """
         # First sheet is casinos.
         df = pd.read_excel(self.url, sheet_name=0, skiprows=3)
-        return df.dropna(how='all', subset=df.columns[1:], ignore_index=True).dropna(how='all', axis=1)
+        return df.dropna(how='all', subset=df.columns[1:]).dropna(how='all', axis=1).reset_index(drop=True)
 
     def clean_gaming(self):
         df = self.gaming_df
@@ -857,7 +860,7 @@ class NewYork(OSBTable):
         df = pd.concat(data, ignore_index=True)
         df = df.rename(columns={'Unnamed: 0': 'Date', 'Unnamed: 3': 'GGR'})
         # convert the date_col column to datetime format
-        df['Date'] = pd.to_datetime(df['Date'], format='mixed', errors='coerce')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         # keep only rows with datetime values in the date_col column
         df = df.dropna(subset=['Date', 'GGR'])
         df = df.sort_values('Date', ascending=True)
@@ -1030,14 +1033,14 @@ def print_end(state):
     print(f"Ending {state}".center(50, '+'))
     
 def scrape(data, cls, *args):
-    try:
+    #try:
         print(f"Scraping {args}")
         data.append(cls(*args).clean())
-    except BaseException as e:
-        print(e.args)
-        print("*Unable to scrape")
-    finally:
-        Path('temp.pdf').unlink(missing_ok=True)
+    #except BaseException as e:
+    #    print(e.args)
+    #    print("*Unable to scrape")
+    #finally:
+    #    Path('temp.pdf').unlink(missing_ok=True)
     
 def scrape_arizona():
     print_start("Arizona")
@@ -1258,9 +1261,9 @@ def scrape_westvirginia():
 
 
 if __name__ == '__main__':
-    scrape_arizona()
-    scrape_connecticut()
-    scrape_illinois()
+    #scrape_arizona()
+    #scrape_connecticut()
+    #scrape_illinois()
     scrape_indiana()
     scrape_iowa()
     scrape_kansas()
