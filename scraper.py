@@ -1036,14 +1036,14 @@ def print_end(state):
     print(f"Ending {state}".center(50, '+'))
     
 def scrape(data, cls, *args):
-    try:
+    #try:
         print(f"Scraping {args}")
         data.append(cls(*args).clean())
-    except BaseException as e:
-        print(e.args)
-        print("*Unable to scrape")
-    finally:
-        Path('temp.pdf').unlink(missing_ok=True)
+    #except BaseException as e:
+    #    print(e.args)
+    #    print("*Unable to scrape")
+    #finally:
+    #   Path('temp.pdf').unlink(missing_ok=True)
     
 def scrape_arizona():
     print_start("Arizona")
@@ -1249,13 +1249,17 @@ def scrape_westvirginia():
 if __name__ == '__main__':
     #scrape_arizona()
     #scrape_connecticut()
-    #scrape_illinois()
     #scrape_indiana()
-    ##scrape_iowa()
-    ##scrape_kansas()
     #scrape_maryland()
-    ##scrape_michigan()
-    #scrape_newjersey()
     #scrape_newyork()
     #scrape_pennsylvania()
+
+    # Requires Selenium. Will only work in an environment where Chrome can be downloaded (not HEX).
+    #scrape_illinois()
+
+    # Requires Camelot.
+    ##scrape_iowa()
+    scrape_kansas()
+    scrape_michigan()
+    #scrape_newjersey()  # long
     ##scrape_westvirginia()
