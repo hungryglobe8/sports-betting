@@ -157,7 +157,8 @@ class Arizona(OSBTable):
         self.date = self.find_timestamp(self.url)
 
     def clean(self):
-        path = Path('temp.pdf')
+        path = Path('arizona_temp.pdf')
+        path.unlink(missing_ok=True)
         path.write_bytes(requests.get(self.url).content)
         pdf = PdfReader(str(path))
         
@@ -490,7 +491,8 @@ class Iowa(OSBTable):
     @staticmethod
     def parse_pdf(url):
         """ Open a pdf, read titles, parse tables, and close pdf. """
-        path = Path('temp.pdf')
+        path = Path('iowa_temp.pdf')
+        path.unlink(missing_ok=True)
         path.write_bytes(requests.get(url).content)
 
         pdf = PdfReader(str(path))
@@ -738,10 +740,11 @@ class NewJersey:
     def __init__(self, link):
         self.link = link
         self.date = extract_date(self.link, '\w+\d{4}', '%B%Y')
-        self.temp_storage = 'temp.pdf'
+        self.temp_storage = 'new_jersey_temp.pdf'
 
     def read_pdf(self):
         """ Saves a content stream to temp_storage. """
+        Path(self.temp_storage).unlink(missing_ok=True)
         Path(self.temp_storage).write_bytes(requests.get(self.link).content)
 
     def close_pdf(self):
@@ -775,56 +778,60 @@ class NewJersey:
 class NewJerseyGaming(NewJersey, IGamingTable):
     def clean(self):
         """ Open PDF, read titles, and relevant first table values. """
-        self.read_pdf()
-        num_pages = self.get_pages()
-        # Gather data from each page.
-        out = []
-        ## Avoid parsing title if possible.
-        #full_list = ["Bally's Atlantic City", 'Borgata Hotel Casino & Spa', 
-        #             'Caesars Interactive Entertainment', 'Golden Nugget', 'Hard Rock Atlantic City', 
-        #             'Ocean Casino Resort', 'Resorts Digital Gaming, LLC', 'Tropicana Casino & Resort']
-        #extra_list = full_list.copy()
-        #extra_list.insert(4, 'Golden Nugget')
-        #casinos = {7: full_list[1:].copy(), 8: full_list.copy(), 9: extra_list}[num_pages]
-        casinos = self.get_casinos()
-        tables = self.get_tables()
-        assert len(tables) == num_pages * 2, "Parser didn't get correct number of tables."
-        for i, casino in zip(range(num_pages), casinos):
-            table = tables[i*2].df.replace(r'[$ \n]', '', regex=True)
-            row = table.iloc[1:,-1].str.rstrip('-')
-            out.append({'State': self.state,
-                        'Category': self.category,
-                        'Sub-Category': ['Online Poker', 'Online Casino', 'Total'],
-                        'Date': self.date,
-                        'Provider': casino,
-                        'Internet Gaming Win': [row[1], row[2], row[3]]})
-        self.close_pdf()
-        return pd.DataFrame(out).explode(['Sub-Category', 'Internet Gaming Win'])
+        try:
+            self.read_pdf()
+            num_pages = self.get_pages()
+            # Gather data from each page.
+            out = []
+            ## Avoid parsing title if possible.
+            #full_list = ["Bally's Atlantic City", 'Borgata Hotel Casino & Spa', 
+            #             'Caesars Interactive Entertainment', 'Golden Nugget', 'Hard Rock Atlantic City', 
+            #             'Ocean Casino Resort', 'Resorts Digital Gaming, LLC', 'Tropicana Casino & Resort']
+            #extra_list = full_list.copy()
+            #extra_list.insert(4, 'Golden Nugget')
+            #casinos = {7: full_list[1:].copy(), 8: full_list.copy(), 9: extra_list}[num_pages]
+            casinos = self.get_casinos()
+            tables = self.get_tables()
+            assert len(tables) == num_pages * 2, "Parser didn't get correct number of tables."
+            for i, casino in zip(range(num_pages), casinos):
+                table = tables[i*2].df.replace(r'[$ \n]', '', regex=True)
+                row = table.iloc[1:,-1].str.rstrip('-')
+                out.append({'State': self.state,
+                            'Category': self.category,
+                            'Sub-Category': ['Online Poker', 'Online Casino', 'Total'],
+                            'Date': self.date,
+                            'Provider': casino,
+                            'Internet Gaming Win': [row[1], row[2], row[3]]})
+            return pd.DataFrame(out).explode(['Sub-Category', 'Internet Gaming Win'])
+        finally:
+            self.close_pdf()
 
 class NewJerseySports(NewJersey, OSBTable):
     def clean(self):
         """ Open PDF, read titles, and get relevant values from first and third tables. """
-        self.read_pdf()
-        num_pages = self.get_pages()
-        # Gather data from each page.
-        out = []
-        casinos = self.get_casinos()
-        tables = self.get_tables()
-        tables_per_page = len(tables) // len(casinos)
-        for i, casino in zip(range(num_pages), casinos):
-            table_idx = tables_per_page * i
-            monthly_retail = self.get_value_from_table(tables, table_idx, (3, -1))
-            monthly_internet = self.get_value_from_table(tables, table_idx+2, (3, -1))
-            out.append({'State': self.state,
-                        'Category': self.category,
-                        'Sub-Category': ['Retail', 'Online'],
-                        'Date': self.date,
-                        'Provider': casino,
-                        'Gross Revenue': [monthly_retail, monthly_internet]})
-        self.close_pdf()
-        out_df = pd.DataFrame(out).explode(['Sub-Category', 'Gross Revenue'])
-        out_df['Gross Revenue'] = out_df['Gross Revenue'].str.rstrip('-')
-        return out_df
+        try:
+            self.read_pdf()
+            num_pages = self.get_pages()
+            # Gather data from each page.
+            out = []
+            casinos = self.get_casinos()
+            tables = self.get_tables()
+            tables_per_page = len(tables) // len(casinos)
+            for i, casino in zip(range(num_pages), casinos):
+                table_idx = tables_per_page * i
+                monthly_retail = self.get_value_from_table(tables, table_idx, (3, -1))
+                monthly_internet = self.get_value_from_table(tables, table_idx+2, (3, -1))
+                out.append({'State': self.state,
+                            'Category': self.category,
+                            'Sub-Category': ['Retail', 'Online'],
+                            'Date': self.date,
+                            'Provider': casino,
+                            'Gross Revenue': [monthly_retail, monthly_internet]})
+            out_df = pd.DataFrame(out).explode(['Sub-Category', 'Gross Revenue'])
+            out_df['Gross Revenue'] = out_df['Gross Revenue'].str.rstrip('-')
+            return out_df
+        finally:
+            self.close_pdf()
 
     def get_value_from_table(self, tables, table_num, coords):
         """ Open camelot table, extract value from coordinates. """
@@ -1233,15 +1240,15 @@ def scrape_westvirginia():
     print_end("West Virgina")
 
 if __name__ == '__main__':
-    #scrape_arizona()
-    #scrape_connecticut()
-    #scrape_illinois()
+    scrape_arizona()
+    scrape_connecticut()
+    scrape_illinois()
     scrape_indiana()
-    #scrape_iowa()
-    #scrape_kansas()
-    #scrape_maryland()
+    scrape_iowa()
+    scrape_kansas()
+    scrape_maryland()
     #scrape_michigan()
-    #scrape_newjersey()
-    #scrape_newyork()
-    #scrape_pennsylvania()
-    #scrape_westvirginia()
+    scrape_newjersey()
+    scrape_newyork()
+    scrape_pennsylvania()
+    scrape_westvirginia()
